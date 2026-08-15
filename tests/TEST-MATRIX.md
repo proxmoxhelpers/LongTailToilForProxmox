@@ -41,4 +41,4 @@ Every executable project command is covered by at least one group.
 | 35 | `swap-vm-disks.sh` | `60-disk-config.sh` | dry-run + real config slot swap |
 | 36 | `unmount-vm-drives.sh` | `30-mount.sh` | dry-run proves mount remains + real unmount |
 
-In addition, `00-static-cli.sh` parses all 36 commands and shared libraries with `/bin/sh`, requires `/bin/sh` entry-point shebangs, scans for prohibited Bash constructs, exercises `--help`/`--version`, and tests both `dryrun --version` and `--version dryrun` for all 36 commands.
+In addition, `00-static-cli.sh` parses all 36 commands and canonical maintenance libraries with `/bin/sh`, requires `/bin/sh` entry-point shebangs, proves every public helper works when copied alone into an empty directory, scans for prohibited Bash constructs, exercises `--help`/`--version`, and tests both `dryrun --version` and `--version dryrun` for all 36 commands.

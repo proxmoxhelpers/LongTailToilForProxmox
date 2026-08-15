@@ -6,6 +6,12 @@ All notable project changes are summarized here.
 
 Integration-validated POSIX baseline.
 
+- Public top-level helpers are now fully self-contained single files.
+- Embedded the common/dry-run runtime into all 36 commands.
+- Embedded companion implementations into the six wrapper commands that previously invoked sibling project scripts.
+- Added a static acceptance test that copies every helper into an empty directory and proves `--help` / `--version` still work without the repository.
+- The repository `lib/` directory is retained only as canonical maintenance source; it is not a runtime dependency.
+
 - Corrected POSIX `set -e` regressions exposed by the first v3 real-system run.
 - Fixed `rename-lvm.sh`, `unmount-vm-drives.sh`, `renumber-vm-disks.sh` and `recover-vm-from-volumes.sh`.
 - Corrected a latent short-circuit guard issue in `set-vm-boot-disk.sh`.

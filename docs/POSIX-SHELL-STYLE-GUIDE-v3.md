@@ -418,17 +418,13 @@ Enable colours only when stdout is a terminal and respect `NO_COLOR`. Keep escap
 
 Use a common `require_command`. When automatically installing packages, detect all missing packages first, report them together, elevate first, install them together where practical, and verify afterward. Do not run `apt-get update` when nothing needs installation.
 
-## 28. Shared-library policy
+## 28. Standalone-runtime policy
 
-Shared helpers are allowed. Use POSIX dot syntax:
+Every published top-level helper must be independently runnable after copying only that one `.sh` file. It must not require `lib/`, another project script, or its original repository directory at runtime.
 
-```sh
-. "$SCRIPT_DIR/lib/common.sh"
-```
+The repository may keep canonical shared source under `lib/` for maintenance and generation, but release helpers embed that POSIX runtime directly. Wrapper helpers must likewise embed any companion implementation they require.
 
-Never use `source`.
-
-Generic mechanics belong in the shared library; script-specific business logic remains in the executable.
+Never use `source`; canonical maintenance code remains POSIX shell. Script-specific business logic remains in the executable, while generated embedded shared-runtime sections are treated as generated content for style purposes.
 
 ## 29. High-level flow before implementation details
 

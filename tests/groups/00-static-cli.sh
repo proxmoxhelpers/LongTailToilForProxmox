@@ -13,7 +13,7 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 setup() {
     define_colours
     PROJECT_VERSION="3.0.1"
-    TEST_SUITE_VERSION="2.0.1"
+    TEST_SUITE_VERSION="2.0.2"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -25,6 +25,7 @@ main() {
     prepare_static_run
     run_case "POSIX sh syntax for all project commands and libraries" test_all_script_syntax
     run_case "All project entry points use /bin/sh" test_all_shebangs
+    run_case "Every project command is standalone" test_all_standalone
     run_case "No prohibited Bash language constructs" test_no_bashisms
     run_case "No set -e unsafe short-circuit die guards" test_no_short_circuit_die
     run_case "--version for all project commands" test_all_versions
@@ -94,7 +95,8 @@ finish_static_run() {
 print_plan() {
     print_banner "Static / CLI tests"
     printf '%s\n' "No test has been executed. Re-run with --run to:"
-    printf '%s\n' "  - parse all 36 v3 commands and shared libraries with /bin/sh"
+    printf '%s\n' "  - parse all 36 v3 commands and canonical maintenance libraries with /bin/sh"
+    printf '%s\n' "  - prove each top-level command runs help/version when copied completely alone"
     printf '%s\n' "  - require /bin/sh entry-point shebangs and reject known Bash-only constructs"
     printf '%s\n' "  - test --version and --help without root/Proxmox preflight"
     printf '%s\n' "  - test dryrun keyword parsing before and after --version"
@@ -112,6 +114,37 @@ test_all_script_syntax() {
     for tas_script in "$PROJECT_ROOT"/*.sh; do sh -n "$tas_script"; tas_count=$((tas_count + 1)); done
     [ "$tas_count" -eq 36 ] || { printf 'Expected 36 project commands, found %s.\n' "$tas_count" >&2; return 1; }
     for tas_lib in "$PROJECT_ROOT"/lib/*.sh; do sh -n "$tas_lib"; done
+}
+
+# Verifies that every public helper has no runtime dependency on lib/ or another
+# project script and that help/version still work after copying only that file.
+test_all_standalone() {
+    tas_root="$TEST_DATA_DIR/standalone"
+    mkdir -p "$tas_root"
+    for tas_script in "$PROJECT_ROOT"/*.sh; do
+        tas_name="$(basename "$tas_script")"
+        tas_dir="$tas_root/${tas_name%.sh}"
+        mkdir -p "$tas_dir"
+        cp "$tas_script" "$tas_dir/$tas_name"
+        chmod +x "$tas_dir/$tas_name"
+
+        if grep -nE '^[[:space:]]*\.[[:space:]].*(lib/common\.sh|lib/dryrun\.sh)' "$tas_dir/$tas_name" >/dev/null 2>&1; then
+            printf '%s still sources an external project library.\n' "$tas_name" >&2
+            return 1
+        fi
+        if grep -nF 'SCRIPT_DIR' "$tas_dir/$tas_name" >/dev/null 2>&1; then
+            printf '%s still depends on its repository directory.\n' "$tas_name" >&2
+            return 1
+        fi
+        if grep -nF 'exec_project_script' "$tas_dir/$tas_name" >/dev/null 2>&1; then
+            printf '%s still uses the external companion-script dispatcher.\n' "$tas_name" >&2
+            return 1
+        fi
+
+        (cd "$tas_dir" && /bin/sh "./$tas_name" --help >/dev/null)
+        tas_version="$(cd "$tas_dir" && /bin/sh "./$tas_name" --version)"
+        printf '%s\n' "$tas_version" | grep -F "(project 3.0.1)" >/dev/null || return 1
+    done
 }
 
 # Verifies every executable project command declares the intended interpreter.

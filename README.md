@@ -4,17 +4,11 @@
 It covers the awkward long-tail work around VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes.  
 The goal is simple: turn a risky sequence of half-remembered shell commands into a preflighted, dry-runnable, verified operation.
 
-> **“Fix for things that are too easy to automate, too hard to remember and don't happen often enough to bother.”**
-
-Repository: [proxmoxhelpers/Proxmox-LongTailToil](https://github.com/proxmoxhelpers/Proxmox-LongTailToil)
-
-> This is an independent community project and is not affiliated with or endorsed by Proxmox Server Solutions GmbH.
-
 ## The 36 helpers
 
 For modifying commands, the examples below use `dryrun` where practical. Dry-run still performs real read-only preflight checks, but prints modifying commands instead of executing them. Remove `dryrun` only after reviewing the plan.
 
-Each single-file download line also fetches the two shared v3 libraries required by the command.
+Every top-level helper is self-contained: download that one `.sh` file, make it executable, and run it anywhere on the Proxmox host.
 
 ### VM identity, recovery and inspection
 
@@ -23,7 +17,7 @@ Each single-file download line also fetches the two shared v3 libraries required
 Change the VMID of a stopped local QEMU VM or LXC container whose backing volumes are on LVM/LVM-thin, with preflight checks, backup, verification and rollback.
 
 ```sh
-for f in change-vmid-of-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x change-vmid-of-vm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-vmid-of-vm.sh" -O "change-vmid-of-vm.sh" && chmod +x "change-vmid-of-vm.sh"
 ```
 
 ```sh
@@ -35,7 +29,7 @@ for f in change-vmid-of-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirnam
 Clone a QEMU VM configuration to a new VMID without copying its disks.
 
 ```sh
-for f in clone-vm-config-only.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x clone-vm-config-only.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/clone-vm-config-only.sh" -O "clone-vm-config-only.sh" && chmod +x "clone-vm-config-only.sh"
 ```
 
 ```sh
@@ -47,7 +41,7 @@ for f in clone-vm-config-only.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dir
 Recreate a basic QEMU VM configuration from existing `vm-VMID-disk-N` LVM volumes.
 
 ```sh
-for f in recover-vm-from-volumes.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x recover-vm-from-volumes.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/recover-vm-from-volumes.sh" -O "recover-vm-from-volumes.sh" && chmod +x "recover-vm-from-volumes.sh"
 ```
 
 ```sh
@@ -59,7 +53,7 @@ for f in recover-vm-from-volumes.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(
 List a QEMU VM's configured disks, resolved storage paths and available LVM metadata.
 
 ```sh
-for f in list-vm-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x list-vm-disks.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/list-vm-disks.sh" -O "list-vm-disks.sh" && chmod +x "list-vm-disks.sh"
 ```
 
 ```sh
@@ -71,7 +65,7 @@ for f in list-vm-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$
 Audit a VM's storage references for missing paths, bad mappings and unexpected references.
 
 ```sh
-for f in audit-vm-storage.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x audit-vm-storage.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/audit-vm-storage.sh" -O "audit-vm-storage.sh" && chmod +x "audit-vm-storage.sh"
 ```
 
 ```sh
@@ -83,7 +77,7 @@ for f in audit-vm-storage.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname
 Find which local guest configuration references a specific LVM path or Proxmox volume ID.
 
 ```sh
-for f in find-volume-owner.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x find-volume-owner.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/find-volume-owner.sh" -O "find-volume-owner.sh" && chmod +x "find-volume-owner.sh"
 ```
 
 ```sh
@@ -95,7 +89,7 @@ for f in find-volume-owner.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirnam
 Find VM-style LVM volumes that do not appear to be referenced by local guest configurations.
 
 ```sh
-for f in find-orphaned-volumes.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x find-orphaned-volumes.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/find-orphaned-volumes.sh" -O "find-orphaned-volumes.sh" && chmod +x "find-orphaned-volumes.sh"
 ```
 
 ```sh
@@ -109,7 +103,7 @@ for f in find-orphaned-volumes.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(di
 Create and byte-verify an independent copy of an LVM/LVM-thin logical volume.
 
 ```sh
-for f in copy-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x copy-lvm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/copy-lvm.sh" -O "copy-lvm.sh" && chmod +x "copy-lvm.sh"
 ```
 
 ```sh
@@ -121,7 +115,7 @@ for f in copy-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")";
 Rename an LV in place within a VG, or copy-verify-delete it safely when moving across VGs.
 
 ```sh
-for f in move-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x move-lvm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-lvm.sh" -O "move-lvm.sh" && chmod +x "move-lvm.sh"
 ```
 
 ```sh
@@ -133,7 +127,7 @@ for f in move-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")";
 Rename an LVM logical volume after validating its source and destination names.
 
 ```sh
-for f in rename-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x rename-lvm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/rename-lvm.sh" -O "rename-lvm.sh" && chmod +x "rename-lvm.sh"
 ```
 
 ```sh
@@ -145,7 +139,7 @@ for f in rename-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")
 Delete an LVM logical volume with explicit confirmation and post-delete verification.
 
 ```sh
-for f in delete-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x delete-lvm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/delete-lvm.sh" -O "delete-lvm.sh" && chmod +x "delete-lvm.sh"
 ```
 
 ```sh
@@ -159,7 +153,7 @@ for f in delete-lvm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")
 Mount recognizable filesystems from an LVM-backed VM disk, using `kpartx` for partitions and read-only mode by default.
 
 ```sh
-for f in mount-vm-drives.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x mount-vm-drives.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/mount-vm-drives.sh" -O "mount-vm-drives.sh" && chmod +x "mount-vm-drives.sh"
 ```
 
 ```sh
@@ -171,7 +165,7 @@ for f in mount-vm-drives.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname 
 Unmount filesystems belonging to an LVM-backed VM disk and safely remove its mapper/empty mount directories.
 
 ```sh
-for f in unmount-vm-drives.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x unmount-vm-drives.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/unmount-vm-drives.sh" -O "unmount-vm-drives.sh" && chmod +x "unmount-vm-drives.sh"
 ```
 
 ```sh
@@ -183,7 +177,7 @@ for f in unmount-vm-drives.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirnam
 Resolve a VM disk slot to its LVM device and mount the filesystems beneath a chosen mount root.
 
 ```sh
-for f in mount-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x mount-vm-disk.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/mount-vm-disk.sh" -O "mount-vm-disk.sh" && chmod +x "mount-vm-disk.sh"
 ```
 
 ```sh
@@ -195,7 +189,7 @@ for f in mount-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$
 Mount a VM disk and identify the filesystem that most likely contains the guest's Linux root.
 
 ```sh
-for f in mount-vm-root.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x mount-vm-root.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/mount-vm-root.sh" -O "mount-vm-root.sh" && chmod +x "mount-vm-root.sh"
 ```
 
 ```sh
@@ -209,7 +203,7 @@ for f in mount-vm-root.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$
 Attach an existing LVM volume to a QEMU VM as a SCSI disk without copying it.
 
 ```sh
-for f in attach-existing-lvm-to-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x attach-existing-lvm-to-vm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/attach-existing-lvm-to-vm.sh" -O "attach-existing-lvm-to-vm.sh" && chmod +x "attach-existing-lvm-to-vm.sh"
 ```
 
 ```sh
@@ -221,7 +215,7 @@ for f in attach-existing-lvm-to-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "
 Detach a VM disk slot while preserving the backing volume as an `unusedN` entry.
 
 ```sh
-for f in detach-disk-from-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x detach-disk-from-vm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/detach-disk-from-vm.sh" -O "detach-disk-from-vm.sh" && chmod +x "detach-disk-from-vm.sh"
 ```
 
 ```sh
@@ -233,7 +227,7 @@ for f in detach-disk-from-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirn
 Delete a VM disk or `unusedN` volume from both the guest configuration and backing Proxmox storage.
 
 ```sh
-for f in delete-disk-from-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x delete-disk-from-vm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/delete-disk-from-vm.sh" -O "delete-disk-from-vm.sh" && chmod +x "delete-disk-from-vm.sh"
 ```
 
 ```sh
@@ -245,7 +239,7 @@ for f in delete-disk-from-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirn
 List or delete selected/all `unusedN` disks from a QEMU VM with shared-reference checks.
 
 ```sh
-for f in cleanup-unused-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x cleanup-unused-disks.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/cleanup-unused-disks.sh" -O "cleanup-unused-disks.sh" && chmod +x "cleanup-unused-disks.sh"
 ```
 
 ```sh
@@ -259,7 +253,7 @@ for f in cleanup-unused-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dir
 Create an LVM-thin snapshot of a source LV and attach it to another QEMU VM.
 
 ```sh
-for f in create-disk-snapshot-and-add-to-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x create-disk-snapshot-and-add-to-vm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-add-to-vm.sh" -O "create-disk-snapshot-and-add-to-vm.sh" && chmod +x "create-disk-snapshot-and-add-to-vm.sh"
 ```
 
 ```sh
@@ -271,7 +265,7 @@ for f in create-disk-snapshot-and-add-to-vm.sh lib/common.sh lib/dryrun.sh; do m
 Create a full independent copy of an LV and attach it to a destination QEMU VM.
 
 ```sh
-for f in create-disk-copy-and-add-to-vm.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x create-disk-copy-and-add-to-vm.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
 ```
 
 ```sh
@@ -283,7 +277,7 @@ for f in create-disk-copy-and-add-to-vm.sh lib/common.sh lib/dryrun.sh; do mkdir
 Copy one QEMU VM disk to another VM as an independent verified volume.
 
 ```sh
-for f in copy-disk-between-vms.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x copy-disk-between-vms.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/copy-disk-between-vms.sh" -O "copy-disk-between-vms.sh" && chmod +x "copy-disk-between-vms.sh"
 ```
 
 ```sh
@@ -295,7 +289,7 @@ for f in copy-disk-between-vms.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(di
 Create an LVM-thin snapshot of one VM disk and attach that linked snapshot to another VM.
 
 ```sh
-for f in snapshot-disk-between-vms.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x snapshot-disk-between-vms.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/snapshot-disk-between-vms.sh" -O "snapshot-disk-between-vms.sh" && chmod +x "snapshot-disk-between-vms.sh"
 ```
 
 ```sh
@@ -307,7 +301,7 @@ for f in snapshot-disk-between-vms.sh lib/common.sh lib/dryrun.sh; do mkdir -p "
 Clone one disk of a QEMU VM and attach the independent copy back to that VM.
 
 ```sh
-for f in clone-single-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x clone-single-vm-disk.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/clone-single-vm-disk.sh" -O "clone-single-vm-disk.sh" && chmod +x "clone-single-vm-disk.sh"
 ```
 
 ```sh
@@ -321,7 +315,7 @@ for f in clone-single-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dir
 Move a VM disk configuration from one bus/slot to another while preserving its disk options.
 
 ```sh
-for f in change-disk-bus.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x change-disk-bus.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-disk-bus.sh" -O "change-disk-bus.sh" && chmod +x "change-disk-bus.sh"
 ```
 
 ```sh
@@ -333,7 +327,7 @@ for f in change-disk-bus.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname 
 Swap the complete configuration values of two VM disk slots.
 
 ```sh
-for f in swap-vm-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x swap-vm-disks.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/swap-vm-disks.sh" -O "swap-vm-disks.sh" && chmod +x "swap-vm-disks.sh"
 ```
 
 ```sh
@@ -345,7 +339,7 @@ for f in swap-vm-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$
 Put a selected VM disk slot first in the QEMU boot order.
 
 ```sh
-for f in set-vm-boot-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x set-vm-boot-disk.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/set-vm-boot-disk.sh" -O "set-vm-boot-disk.sh" && chmod +x "set-vm-boot-disk.sh"
 ```
 
 ```sh
@@ -357,7 +351,7 @@ for f in set-vm-boot-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname
 Replace a VM disk slot with an existing replacement LVM volume while retaining the slot's disk options.
 
 ```sh
-for f in replace-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x replace-vm-disk.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/replace-vm-disk.sh" -O "replace-vm-disk.sh" && chmod +x "replace-vm-disk.sh"
 ```
 
 ```sh
@@ -369,7 +363,7 @@ for f in replace-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname 
 Renumber a VM's backing `vm-VMID-disk-N` LVs into a contiguous sequence and update its configuration.
 
 ```sh
-for f in renumber-vm-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x renumber-vm-disks.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/renumber-vm-disks.sh" -O "renumber-vm-disks.sh" && chmod +x "renumber-vm-disks.sh"
 ```
 
 ```sh
@@ -381,7 +375,7 @@ for f in renumber-vm-disks.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirnam
 Rename backing VM LVs whose embedded VMID does not match the VM that references them.
 
 ```sh
-for f in fix-vm-volume-names.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x fix-vm-volume-names.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/fix-vm-volume-names.sh" -O "fix-vm-volume-names.sh" && chmod +x "fix-vm-volume-names.sh"
 ```
 
 ```sh
@@ -395,7 +389,7 @@ for f in fix-vm-volume-names.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirn
 Move one QEMU VM disk to another configured Proxmox storage using `qm move_disk`.
 
 ```sh
-for f in move-disk-to-storage.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x move-disk-to-storage.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-disk-to-storage.sh" -O "move-disk-to-storage.sh" && chmod +x "move-disk-to-storage.sh"
 ```
 
 ```sh
@@ -407,7 +401,7 @@ for f in move-disk-to-storage.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dir
 Move matching VM disks from one Proxmox storage ID to another across multiple VMIDs.
 
 ```sh
-for f in bulk-change-vm-storage.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x bulk-change-vm-storage.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/bulk-change-vm-storage.sh" -O "bulk-change-vm-storage.sh" && chmod +x "bulk-change-vm-storage.sh"
 ```
 
 ```sh
@@ -419,7 +413,7 @@ for f in bulk-change-vm-storage.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(d
 Rewrite an old Proxmox storage ID prefix to a new storage ID in affected local guest configurations.
 
 ```sh
-for f in change-vm-storage-prefix.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x change-vm-storage-prefix.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-vm-storage-prefix.sh" -O "change-vm-storage-prefix.sh" && chmod +x "change-vm-storage-prefix.sh"
 ```
 
 ```sh
@@ -431,7 +425,7 @@ for f in change-vm-storage-prefix.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$
 Import a disk image into Proxmox storage and attach the resulting volume to a QEMU VM.
 
 ```sh
-for f in import-disk-and-attach.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x import-disk-and-attach.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/import-disk-and-attach.sh" -O "import-disk-and-attach.sh" && chmod +x "import-disk-and-attach.sh"
 ```
 
 ```sh
@@ -443,7 +437,7 @@ for f in import-disk-and-attach.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(d
 Export a QEMU VM disk to a raw or qcow2 image using `qemu-img`.
 
 ```sh
-for f in export-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x export-vm-disk.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/export-vm-disk.sh" -O "export-vm-disk.sh" && chmod +x "export-vm-disk.sh"
 ```
 
 ```sh
@@ -457,12 +451,26 @@ for f in export-vm-disk.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "
 Apply the same bridge/tag/firewall/model settings to one NIC slot across multiple QEMU VMs.
 
 ```sh
-for f in bulk-change-vm-network.sh lib/common.sh lib/dryrun.sh; do mkdir -p "$(dirname "$f")"; wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$f" -O "$f"; done; chmod +x bulk-change-vm-network.sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/bulk-change-vm-network.sh" -O "bulk-change-vm-network.sh" && chmod +x "bulk-change-vm-network.sh"
 ```
 
 ```sh
 ./bulk-change-vm-network.sh net0 vmbr1 --tag 20 --firewall 1 123 124 125 dryrun
 ```
+
+## Standalone by design
+
+The `lib/` directory in the repository is the canonical maintenance source for shared helper code, but the published top-level commands do **not** source it at runtime. The shared runtime is embedded into every helper, and wrapper commands also bundle the companion implementation they need.
+
+That means this is valid:
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-vmid-of-vm.sh" -O change-vmid-of-vm.sh
+chmod +x change-vmid-of-vm.sh
+./change-vmid-of-vm.sh --help
+```
+
+You can move that file to `/root`, `/usr/local/sbin`, a rescue directory, or another host without copying anything else from this repository.
 
 ## Install the whole repository
 

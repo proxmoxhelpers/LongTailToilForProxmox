@@ -1,6 +1,6 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.0.1**  
+Test suite version: **2.0.2**  
 Project target: **3.0.1**
 
 This suite exercises all 36 project commands on a real Proxmox node while avoiding production storage and guests.
@@ -28,6 +28,12 @@ Several negative probes had been written as `probe && die ...`. When such an AND
 
 v2.0.1 converts those probes to explicit `if ...; then die ...; fi` blocks, adds explicit successful returns to affected validators, hardens boot-order iteration, and adds a static regression forbidding `&& die` in project shell source.
 
+## v2.0.2 — standalone helper contract
+
+Every top-level project command is now a self-contained single file. The static group copies each helper into an otherwise empty directory and requires both `--help` and `--version` to work there. It also rejects runtime sourcing of `lib/common.sh` / `lib/dryrun.sh`, `SCRIPT_DIR` repository coupling, and the old external companion-script dispatcher.
+
+The repository `lib/` directory remains only as the canonical maintenance source for the embedded shared runtime.
+
 ## v2.0.0 — v3 POSIX migration
 
 The test harness remains POSIX shell and now targets project v3.0.0.
@@ -42,7 +48,7 @@ It now verifies:
 
 ```text
 all 36 command entry points parse with /bin/sh
-shared project libraries parse with /bin/sh
+canonical maintenance libraries parse with /bin/sh
 every command entry point declares #!/bin/sh
 known prohibited Bash constructs are absent
 all --help paths work before privilege/environment preflight

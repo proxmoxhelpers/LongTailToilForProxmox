@@ -18,6 +18,8 @@ Project shell entry points target:
 set -eu
 ```
 
+Public top-level helpers are **standalone artifacts**. They must not source `lib/` or require another project `.sh` at runtime. `lib/common.sh` and `lib/dryrun.sh` are retained as canonical maintenance sources for the embedded runtime; changes to shared primitives must be propagated to every generated top-level helper before release.
+
 Do not introduce Bash-only syntax unless the project explicitly adopts a documented exception.
 
 ## Safety requirements
