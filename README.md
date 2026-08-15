@@ -1,14 +1,8 @@
 # Proxmox LongTail Toil
 
-**Proxmox LongTail Toil** is a collection of small, safety-focused helpers for the Proxmox jobs that are too easy to automate, too hard to remember, and do not happen often enough to bother scripting from scratch each time.  
-It covers the awkward long-tail work around VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes.  
-The goal is simple: turn a risky sequence of half-remembered shell commands into a preflighted, dry-runnable, verified operation.
+**Proxmox LongTail Toil** is a collection of 36 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
 
 ## The 36 helpers
-
-For modifying commands, the examples below use `dryrun` where practical. Dry-run still performs real read-only preflight checks, but prints modifying commands instead of executing them. Remove `dryrun` only after reviewing the plan.
-
-Every top-level helper is self-contained: download that one `.sh` file, make it executable, and run it anywhere on the Proxmox host.
 
 ### VM identity, recovery and inspection
 
