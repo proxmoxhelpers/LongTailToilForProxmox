@@ -1,4 +1,4 @@
-# Test Coverage Matrix — v3.1.0
+# Test Coverage Matrix — v3.2.0
 
 Every executable project command is covered by at least one group.
 
@@ -17,30 +17,32 @@ Every executable project command is covered by at least one group.
 | 11 | `copy-disk-between-vms.sh` | `50-copy-snapshot.sh` | dry-run + real cross-VM copy |
 | 12 | `copy-lvm.sh` | `20-lvm.sh` | dry-run + real cross-VG independent copy + `cmp` |
 | 13 | `create-disk-copy-and-add-to-vm.sh` | `50-copy-snapshot.sh` | dry-run + real copy to second VG and attach |
-| 14 | `create-disk-snapshot-and-add-to-vm.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot and attach |
-| 15 | `delete-disk-from-vm.sh` | `40-disk-lifecycle.sh` | dry-run + real test-volume deletion |
-| 16 | `delete-lvm.sh` | `20-lvm.sh` | dry-run + explicit `DELETE` confirmation on test LV |
-| 17 | `detach-disk-from-vm.sh` | `40-disk-lifecycle.sh` | dry-run + real detach to `unusedN` |
-| 18 | `export-vm-disk.sh` | `70-storage-io.sh` | dry-run no-output proof + real qcow2 export |
-| 19 | `find-orphaned-volumes.sh` | `10-inspection.sh` | discovers intentionally orphaned test LV |
-| 20 | `find-volume-owner.sh` | `10-inspection.sh` | resolves test LV back to test VM config |
-| 21 | `fix-vm-volume-names.sh` | `60-disk-config.sh` | dry-run + real repair of intentionally mismatched test LV |
-| 22 | `import-disk-and-attach.sh` | `70-storage-io.sh` | dry-run + real small raw-image import |
-| 23 | `list-all-vm-lvm.sh` | `10-inspection.sh` | read-only grouping of referenced LVs by VMID + remaining-LV list |
-| 24 | `list-vm-disks.sh` | `10-inspection.sh` | lists attached disposable test LV |
-| 25 | `mount-vm-disk.sh` | `30-mount.sh` | dry-run + real read-only mount via VM slot |
-| 26 | `mount-vm-drives.sh` | `30-mount.sh` | dry-run + real read-only direct-LV mount |
-| 27 | `mount-vm-root.sh` | `30-mount.sh` | dry-run + real synthetic Linux-root detection |
-| 28 | `move-disk-to-storage.sh` | `70-storage-io.sh` | dry-run + real move between test storages |
-| 29 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | dry-run immutability + real full-path/VM-disk moves + hot/pause/stop/restart modes |
-| 30 | `move-lvm.sh` | `20-lvm.sh` | dry-run + real cross-VG move |
-| 31 | `recover-vm-from-volumes.sh` | `80-vm-config.sh` | dry-run + real recovery from orphaned test LV |
-| 32 | `rename-lvm.sh` | `20-lvm.sh` | dry-run + real test-LV rename |
-| 33 | `renumber-vm-disks.sh` | `60-disk-config.sh` | dry-run + real 3/7 → 0/1 test-volume renumber |
-| 34 | `replace-vm-disk.sh` | `60-disk-config.sh` | dry-run + real replacement with test LV |
-| 35 | `set-vm-boot-disk.sh` | `60-disk-config.sh` | dry-run + real boot-order update |
-| 36 | `snapshot-disk-between-vms.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot between test VMs |
-| 37 | `swap-vm-disks.sh` | `60-disk-config.sh` | dry-run + real config slot swap |
-| 38 | `unmount-vm-drives.sh` | `30-mount.sh` | dry-run proves mount remains + real unmount |
+| 14 | `create-disk-copy-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | dry-run + real verified copy replacing a disposable VM disk while preserving old volume |
+| 15 | `create-disk-snapshot-and-add-to-vm.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot and attach |
+| 16 | `create-disk-snapshot-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot replacing a disposable VM disk while preserving old volume |
+| 17 | `delete-disk-from-vm.sh` | `40-disk-lifecycle.sh` | dry-run + real test-volume deletion |
+| 18 | `delete-lvm.sh` | `20-lvm.sh` | dry-run + explicit `DELETE` confirmation on test LV |
+| 19 | `detach-disk-from-vm.sh` | `40-disk-lifecycle.sh` | dry-run + real detach to `unusedN` |
+| 20 | `export-vm-disk.sh` | `70-storage-io.sh` | dry-run no-output proof + real qcow2 export |
+| 21 | `find-orphaned-volumes.sh` | `10-inspection.sh` | discovers intentionally orphaned test LV |
+| 22 | `find-volume-owner.sh` | `10-inspection.sh` | resolves test LV back to test VM config |
+| 23 | `fix-vm-volume-names.sh` | `60-disk-config.sh` | dry-run + real repair of intentionally mismatched test LV |
+| 24 | `import-disk-and-attach.sh` | `70-storage-io.sh` | dry-run + real small raw-image import |
+| 25 | `list-all-vm-lvm.sh` | `10-inspection.sh` | read-only grouping of referenced LVs by VMID + remaining-LV list |
+| 26 | `list-vm-disks.sh` | `10-inspection.sh` | lists attached disposable test LV |
+| 27 | `mount-vm-disk.sh` | `30-mount.sh` | dry-run + real read-only mount via VM slot |
+| 28 | `mount-vm-drives.sh` | `30-mount.sh` | dry-run + real read-only direct-LV mount |
+| 29 | `mount-vm-root.sh` | `30-mount.sh` | dry-run + real synthetic Linux-root detection |
+| 30 | `move-disk-to-storage.sh` | `70-storage-io.sh` | dry-run + real move between test storages |
+| 31 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | dry-run immutability + real full-path/VM-disk moves + hot/pause/stop/restart modes |
+| 32 | `move-lvm.sh` | `20-lvm.sh` | dry-run + real cross-VG move |
+| 33 | `recover-vm-from-volumes.sh` | `80-vm-config.sh` | dry-run + real recovery from orphaned test LV |
+| 34 | `rename-lvm.sh` | `20-lvm.sh` | dry-run + real test-LV rename |
+| 35 | `renumber-vm-disks.sh` | `60-disk-config.sh` | dry-run + real 3/7 → 0/1 test-volume renumber |
+| 36 | `replace-vm-disk.sh` | `60-disk-config.sh` | dry-run + real replacement with test LV |
+| 37 | `set-vm-boot-disk.sh` | `60-disk-config.sh` | dry-run + real boot-order update |
+| 38 | `snapshot-disk-between-vms.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot between test VMs |
+| 39 | `swap-vm-disks.sh` | `60-disk-config.sh` | dry-run + real config slot swap |
+| 40 | `unmount-vm-drives.sh` | `30-mount.sh` | dry-run proves mount remains + real unmount |
 
-In addition, `00-static-cli.sh` parses all 38 commands and canonical maintenance libraries with `/bin/sh`, requires `/bin/sh` entry-point shebangs, proves every public helper works when copied alone into an empty directory, scans for prohibited Bash constructs, exercises `--help`/`--version`, and tests both `dryrun --version` and `--version dryrun` for all 38 commands.
+In addition, `00-static-cli.sh` parses all 40 commands and canonical maintenance libraries with `/bin/sh`, requires `/bin/sh` entry-point shebangs, proves every public helper works when copied alone into an empty directory, scans for prohibited Bash constructs, exercises `--help`/`--version`, and tests both `dryrun --version` and `--version dryrun` for all 40 commands.

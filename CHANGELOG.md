@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.2.0 — 2026-08-17
+
+Disk create/overwrite expansion.
+
+- Added `create-disk-copy-and-overwrite-disk-on-vm.sh`.
+- Added `create-disk-snapshot-and-overwrite-disk-on-vm.sh`.
+- Overwrite helpers accept source and destination as either full LVM paths or `VMID + disk-N`/slot selectors.
+- Overwrite helpers default to hot replacement and accept `pause`, `stop`, or `restart` anywhere on the command line.
+- The destination VM is the state-controlled VM for overwrite operations because it is the VM losing/replacing a disk.
+- Displaced destination volumes are preserved as `unusedN`; they are not automatically deleted.
+- Expanded `create-disk-copy-and-add-to-vm.sh` and `create-disk-snapshot-and-add-to-vm.sh` to accept full-path or `VMID + disk-N` sources, optional destination backing disk numbers, and hot/pause/stop/restart source-state modes.
+- Preserved the previous copy-and-add positional destination-VG form.
+- Expanded the disposable integration matrix to 40 commands and added overwrite cases to `50-copy-snapshot.sh`.
+
+
 All notable project changes are summarized here.
 
 ## 3.1.0 — 2026-08-17

@@ -382,142 +382,199 @@ dryrun_summary() {
 }
 
 
-
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.1.0"; SCRIPT_VERSION="3.0.0"
-    CREATED=0; ATTACHED=0; COMPLETE=0
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs lvcreate lvremove qm pvesm readlink awk grep sed sort tail mktemp
-    validate_source
-    validate_destination_vm
-    select_storage
-    select_disk_name
-    SCSI_DEVICE="$(first_free_scsi "$DEST_VMID")" || die "No free SCSI disk slot is available on VM $DEST_VMID."
-    TARGET_STATUS="$(qm status "$DEST_VMID" 2>/dev/null | awk '{print $2}' || :)"
-    print_plan
-    trap cleanup_on_exit 0
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    create_snapshot
-    verify_storage_mapping
-    attach_snapshot
-    verify_result
-    COMPLETE=1
-}
-
-end() {
-    print_banner "Snapshot created and attached successfully"
-    printf 'Source:          %s\n' "$SOURCE_PATH"
-    printf 'Snapshot:        %s\n' "$NEW_LV_PATH"
-    printf 'Proxmox volume:  %s\n' "$NEW_VOLID"
-    printf 'Destination VM:  %s\n' "$DEST_VMID"
-    printf 'Attached as:     %s\n' "$SCSI_DEVICE"
-    printf 'VM status:       %s\n\n' "${TARGET_STATUS:-unknown}"
-    dryrun_summary
-}
-
-############################################################
-# COMMAND LINE
+# SOURCE RESOLUTION / STATE
 ############################################################
 
-usage() {
-    cat <<EOF
-create-disk-snapshot-and-add-to-vm.sh $SCRIPT_VERSION (project $PROJECT_VERSION)
-
-USAGE
-  create-disk-snapshot-and-add-to-vm.sh <source-lv-path> <destination-vmid> [dryrun]
-
-DESCRIPTION
-  Creates an LVM-thin snapshot named vm-DESTVMID-disk-N, chooses the first
-  free SCSI slot independently, and attaches the snapshot to a QEMU VM.
-
-EXAMPLE
-  create-disk-snapshot-and-add-to-vm.sh /dev/thinvg/vm-132-disk-1 115
-
-EOF
-    dryrun_help
+# set_state_mode MODE
+# Selects at most one of hot/pause/stop/restart; hot is the default.
+set_state_mode() {
+    ssm_new="$1"
+    if [ -n "${MODE_ARG:-}" ] && [ "$MODE_ARG" != "$ssm_new" ]; then die "Choose only one of pause, stop, or restart."; fi
+    MODE="$ssm_new"; MODE_ARG="$ssm_new"
 }
 
-parse_arguments() {
-    pa_count=0
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
-            --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
-            *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) SOURCE="$1" ;; 2) DEST_VMID="$1" ;; *) usage >&2; exit 2 ;; esac ;;
-        esac
-        shift
-    done
-    [ "$pa_count" -eq 2 ] || { usage >&2; exit 2; }
-}
+# normalize_disk_number VALUE
+# Prints N for N or disk-N; exits nonzero for another token.
+normalize_disk_number() (
+    ndn_value="$1"
+    case "$ndn_value" in
+        disk-[0-9]*) ndn_value="${ndn_value#disk-}" ;;
+        [0-9]*) ;;
+        *) exit 1 ;;
+    esac
+    case "$ndn_value" in ''|*[!0-9]*) exit 1 ;; esac
+    printf '%s\n' "$ndn_value"
+)
 
-############################################################
-# VALIDATION / PRE-FLIGHT
-############################################################
-
-# validate_source
-# Resolves and validates source LV metadata required by the planned operation.
-validate_source() {
-    case "$DEST_VMID" in ''|*[!0-9]*) die "Destination VMID must be numeric." ;; esac
-    lvs "$SOURCE" >/dev/null 2>&1 || die "Source is not an LVM logical volume: $SOURCE"
-    SOURCE_PATH="$(lvs --noheadings -o lv_path "$SOURCE" 2>/dev/null | trim)"
-    SOURCE_VG="$(lvs --noheadings -o vg_name "$SOURCE" 2>/dev/null | trim)"
-    SOURCE_LV="$(lvs --noheadings -o lv_name "$SOURCE" 2>/dev/null | trim)"
-    SOURCE_POOL="$(lvs --noheadings -o pool_lv "$SOURCE" 2>/dev/null | trim)"
-    SOURCE_ATTR="$(lvs --noheadings -o lv_attr "$SOURCE" 2>/dev/null | trim)"
-    [ -n "$SOURCE_PATH" ] && [ -n "$SOURCE_VG" ] && [ -n "$SOURCE_LV" ] || die "Could not resolve source LV metadata."
-    if [ -z "$SOURCE_POOL" ]; then
-        printf 'Source:        %s\nLV attributes: %s\n' "$SOURCE_PATH" "$SOURCE_ATTR"
-        die "Source is not an LVM-thin volume."
-    fi
-}
-
-# validate_destination_vm
-# Validates the local destination QEMU VM, config readability and lock state.
-validate_destination_vm() {
-    TARGET_CONFIG="/etc/pve/qemu-server/${DEST_VMID}.conf"
-    if [ ! -f "$TARGET_CONFIG" ]; then
-        [ ! -f "/etc/pve/lxc/${DEST_VMID}.conf" ] || die "VMID $DEST_VMID is an LXC container; this script attaches disks to QEMU VMs only."
-        die "Destination QEMU VM $DEST_VMID does not exist on this node."
-    fi
-    qm config "$DEST_VMID" >/dev/null 2>&1 || die "Proxmox could not read configuration for VM $DEST_VMID."
-    TARGET_QM_CONFIG="$(qm config "$DEST_VMID")"
-    if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE '^lock:[[:space:]]*'; then
-        printf '%s\n' "$TARGET_QM_CONFIG" | grep -E '^lock:[[:space:]]*' | sed 's/^/  /'
-        die "Resolve the VM lock before attaching a disk."
-    fi
-}
-
-# select_storage
+# resolve_vm_disk_slot VMID SELECTOR
 #
 # Description:
-#   Finds the unique Proxmox lvmthin storage matching SOURCE_VG/SOURCE_POOL
-#   and accepting image content.
+#   Resolves an explicit QEMU slot or backing disk number to exactly one
+#   configured storage-backed disk slot.
 #
 # Usage:
-#   select_storage
+#   resolve_vm_disk_slot VMID SELECTOR
 #
 # Arguments:
-#   Uses SOURCE_VG and SOURCE_POOL.
+#   SELECTOR may be N, disk-N, scsiN, sataN, virtioN, ideN or unusedN.
 #
 # Output:
-#   Sets STORAGE_ID.
+#   Prints the matching slot.
 #
 # Returns:
-#   0 only for an unambiguous mapping.
+#   0 for one match, nonzero via die for absent/ambiguous selectors.
 ############################################################
+resolve_vm_disk_slot() {
+    rvds_vm="$1"; rvds_selector="$2"
+    case "$rvds_selector" in
+        scsi[0-9]*|sata[0-9]*|virtio[0-9]*|ide[0-9]*|unused[0-9]*)
+            rvds_value="$(disk_value "$rvds_vm" "$rvds_selector")"
+            [ -n "$rvds_value" ] || die "VM $rvds_vm has no disk at $rvds_selector."
+            printf '%s\n' "$rvds_selector"
+            return 0
+            ;;
+    esac
+    rvds_num="$(normalize_disk_number "$rvds_selector" 2>/dev/null || :)"
+    [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an explicit QEMU disk slot."
+    rvds_name="vm-${rvds_vm}-disk-${rvds_num}"
+    rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v name="$rvds_name" '
+        $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
+            split($2,a,","); v=a[1]; sub(/^[^:]+:/,"",v)
+            if (v == name) print $1
+        }')"
+    rvds_count="$(printf '%s\n' "$rvds_slots" | awk 'NF {n++} END {print n+0}')"
+    [ "$rvds_count" -gt 0 ] || die "VM $rvds_vm has no configured backing volume named $rvds_name."
+    [ "$rvds_count" -eq 1 ] || { printf '%s\n' "$rvds_slots" >&2; die "$rvds_name matches multiple VM slots."; }
+    printf '%s\n' "$rvds_slots" | awk 'NF {print; exit}'
+}
+
+# discover_source_owner
+#
+# Description:
+#   Discovers the unique active local QEMU VM slot referring to SOURCE_PATH by
+#   LV UUID. An unreferenced source is valid in hot mode. A non-hot state mode
+#   requires one unambiguous active source VM.
+#
+# Usage:
+#   discover_source_owner
+#
+# Arguments:
+#   Uses SOURCE_PATH and SOURCE_UUID.
+#
+# Output:
+#   Sets SOURCE_VM, SOURCE_SLOT, SOURCE_ACTIVE and SOURCE_STATUS.
+#
+# Returns:
+#   0 for a usable source.
+############################################################
+discover_source_owner() {
+    dso_refs="$(guest_volume_references | while IFS='|' read -r dso_cfg dso_slot dso_volid; do
+        case "$dso_cfg" in */qemu-server/*) ;; *) continue ;; esac
+        case "$dso_slot" in unused*) continue ;; esac
+        dso_path="$(pvesm path "$dso_volid" 2>/dev/null || :)"
+        [ -n "$dso_path" ] || continue
+        lvs "$dso_path" >/dev/null 2>&1 || continue
+        dso_uuid="$(lvs --noheadings -o lv_uuid "$dso_path" 2>/dev/null | trim)"
+        [ "$dso_uuid" = "$SOURCE_UUID" ] || continue
+        dso_id="${dso_cfg##*/}"; dso_id="${dso_id%.conf}"
+        printf '%s|%s\n' "$dso_id" "$dso_slot"
+    done | sort -u)"
+    dso_count="$(printf '%s\n' "$dso_refs" | awk 'NF {n++} END {print n+0}')"
+    SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
+    if [ "$dso_count" -eq 1 ]; then
+        SOURCE_VM="${dso_refs%%|*}"; SOURCE_SLOT="${dso_refs#*|}"
+        if [ -f "/etc/pve/qemu-server/${SOURCE_VM}.conf" ]; then
+            SOURCE_ACTIVE=1
+            SOURCE_STATUS="$(qm status "$SOURCE_VM" 2>/dev/null | awk '{print $2}' || :)"
+        else
+            SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0
+        fi
+    elif [ "$dso_count" -gt 1 ]; then
+        if [ "$MODE" != "hot" ]; then printf '%s\n' "$dso_refs" >&2; die "Source LV is actively referenced by multiple QEMU disks; cannot apply one VM state mode safely."; fi
+        warn "Source LV has multiple active QEMU references; hot mode will not change guest state."
+    elif [ "$MODE" != "hot" ]; then
+        die "$MODE was requested, but the source LV is not attached to one active local QEMU VM."
+    fi
+}
+
+# resolve_source
+# Resolves either a full LV path or VMID + disk selector to SOURCE_* metadata.
+resolve_source() {
+    if [ "$SOURCE_FORM" = "path" ]; then
+        assert_lv_exists "$SOURCE_INPUT"
+        SOURCE_PATH="$(canonical_lv_path "$SOURCE_INPUT")"
+        SOURCE_UUID="$(lvs --noheadings -o lv_uuid "$SOURCE_PATH" 2>/dev/null | trim)"
+        [ -n "$SOURCE_UUID" ] || die "Could not determine LV UUID for $SOURCE_PATH."
+        discover_source_owner
+    else
+        SOURCE_VM="$SOURCE_VM_INPUT"
+        require_qemu_vm "$SOURCE_VM"
+        SOURCE_SLOT="$(resolve_vm_disk_slot "$SOURCE_VM" "$SOURCE_SELECTOR")"
+        SOURCE_VALUE="$(disk_value "$SOURCE_VM" "$SOURCE_SLOT")"
+        [ -n "$SOURCE_VALUE" ] || die "VM $SOURCE_VM has no disk at $SOURCE_SLOT."
+        case "$SOURCE_VALUE" in *,media=cdrom*) die "Refusing CD-ROM/cloud media as a source disk." ;; esac
+        SOURCE_VOLID="${SOURCE_VALUE%%,*}"
+        SOURCE_INPUT_PATH="$(pvesm path "$SOURCE_VOLID" 2>/dev/null || :)"
+        [ -n "$SOURCE_INPUT_PATH" ] || die "Could not resolve $SOURCE_VOLID."
+        assert_lv_exists "$SOURCE_INPUT_PATH"
+        SOURCE_PATH="$(canonical_lv_path "$SOURCE_INPUT_PATH")"
+        SOURCE_UUID="$(lvs --noheadings -o lv_uuid "$SOURCE_PATH" 2>/dev/null | trim)"
+        case "$SOURCE_SLOT" in unused*) SOURCE_ACTIVE=0; SOURCE_STATUS="" ;; *)
+            SOURCE_ACTIVE=1
+            SOURCE_STATUS="$(qm status "$SOURCE_VM" 2>/dev/null | awk '{print $2}' || :)"
+            ;;
+        esac
+        if [ "$MODE" != "hot" ] && [ "$SOURCE_ACTIVE" -eq 0 ]; then die "$MODE was requested, but $SOURCE_SLOT is not an active VM disk."; fi
+    fi
+    SOURCE_VG="$(lvs --noheadings -o vg_name "$SOURCE_PATH" 2>/dev/null | trim)"
+    SOURCE_LV="$(lvs --noheadings -o lv_name "$SOURCE_PATH" 2>/dev/null | trim)"
+    SOURCE_POOL="$(lvs --noheadings -o pool_lv "$SOURCE_PATH" 2>/dev/null | trim)"
+    SOURCE_ATTR="$(lvs --noheadings -o lv_attr "$SOURCE_PATH" 2>/dev/null | trim)"
+    SOURCE_SIZE_BYTES="$(blockdev --getsize64 "$SOURCE_PATH" 2>/dev/null || :)"
+    [ -n "$SOURCE_VG" ] && [ -n "$SOURCE_LV" ] || die "Could not resolve source LVM metadata."
+    case "$SOURCE_SIZE_BYTES" in ''|*[!0-9]*) die "Could not determine source LV size." ;; esac
+}
+
+# apply_source_state
+# Applies pause/stop/restart preparation to the source VM when requested.
+apply_source_state() {
+    [ "$SOURCE_ACTIVE" -eq 1 ] || return 0
+    case "$MODE" in
+        hot) info "Source VM state: ${SOURCE_STATUS:-unknown}; hot mode leaves it unchanged." ;;
+        pause)
+            if [ "$SOURCE_STATUS" = "running" ]; then
+                info "Pausing source VM $SOURCE_VM..."
+                dryrun_cmd qm suspend "$SOURCE_VM"
+                PAUSED_BY_US=1
+            else info "Source VM $SOURCE_VM is ${SOURCE_STATUS:-unknown}; no pause is required."; fi
+            ;;
+        stop|restart)
+            if [ "$SOURCE_STATUS" != "stopped" ]; then
+                info "Stopping source VM $SOURCE_VM..."
+                dryrun_cmd qm stop "$SOURCE_VM"
+                STOPPED_BY_US=1
+                if ! dryrun_enabled; then [ "$(qm status "$SOURCE_VM" | awk '{print $2}')" = "stopped" ] || die "Source VM $SOURCE_VM did not stop."; fi
+            else info "Source VM $SOURCE_VM is already stopped."; fi
+            ;;
+    esac
+}
+
+# restore_source_state
+# Resumes/restarts only a source VM whose state this invocation changed.
+restore_source_state() {
+    if [ "$MODE" = "pause" ] && [ "$PAUSED_BY_US" -eq 1 ]; then
+        info "Resuming source VM $SOURCE_VM..."
+        dryrun_cmd qm resume "$SOURCE_VM" || { warn "Could not resume source VM $SOURCE_VM."; return 1; }
+        PAUSED_BY_US=0
+    elif [ "$MODE" = "restart" ] && [ "$STOPPED_BY_US" -eq 1 ]; then
+        info "Starting source VM $SOURCE_VM..."
+        dryrun_cmd qm start "$SOURCE_VM" || { warn "Could not restart source VM $SOURCE_VM."; return 1; }
+        STOPPED_BY_US=0
+    fi
+    return 0
+}
+
 select_storage() {
     [ -f /etc/pve/storage.cfg ] || die "Proxmox storage configuration not found: /etc/pve/storage.cfg"
     ss_matches="$(awk -v wanted_vg="$SOURCE_VG" -v wanted_pool="$SOURCE_POOL" '
@@ -539,47 +596,6 @@ select_storage() {
     esac
 }
 
-# select_disk_name
-# Chooses a disk number above the current maximum, skipping config/LVM collisions.
-select_disk_name() {
-    sdn_highest="$(printf '%s\n' "$TARGET_QM_CONFIG" | grep -oE "vm-${DEST_VMID}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
-    if [ -n "$sdn_highest" ]; then DISK_NUMBER=$((sdn_highest + 1)); else DISK_NUMBER=0; fi
-    while :; do
-        NEW_LV_NAME="vm-${DEST_VMID}-disk-${DISK_NUMBER}"
-        NEW_LV_PATH="/dev/${SOURCE_VG}/${NEW_LV_NAME}"
-        NEW_VOLID="${STORAGE_ID}:${NEW_LV_NAME}"
-        sdn_config=0; sdn_lvm=0
-        printf '%s\n' "$TARGET_QM_CONFIG" | grep -qF "$NEW_LV_NAME" && sdn_config=1 || :
-        lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 && sdn_lvm=1 || :
-        [ "$sdn_config" -eq 0 ] && [ "$sdn_lvm" -eq 0 ] && break
-        warn "Disk number $DISK_NUMBER is unavailable."
-        [ "$sdn_config" -eq 0 ] || warn "  VM configuration references $NEW_LV_NAME"
-        [ "$sdn_lvm" -eq 0 ] || warn "  LVM volume already exists: $NEW_LV_PATH"
-        DISK_NUMBER=$((DISK_NUMBER + 1))
-    done
-}
-
-############################################################
-# TRANSACTION
-############################################################
-
-# print_plan
-# Prints the fully resolved transaction plan before the first mutation.
-print_plan() {
-    print_banner "Create linked disk snapshot and attach to VM"
-    printf 'Source LV:             %s\n' "$SOURCE_PATH"
-    printf 'Source VG:             %s\n' "$SOURCE_VG"
-    printf 'Thin pool:             %s\n' "$SOURCE_POOL"
-    printf 'Proxmox storage:       %s\n' "$STORAGE_ID"
-    printf 'Destination VM:        %s\n' "$DEST_VMID"
-    printf 'Destination VM status: %s\n' "${TARGET_STATUS:-unknown}"
-    printf 'New snapshot LV:       %s\n' "$NEW_LV_PATH"
-    printf 'Proxmox volume ID:     %s\n' "$NEW_VOLID"
-    printf 'Attach as:             %s\n\n' "$SCSI_DEVICE"
-}
-
-# create_snapshot
-# Creates the LVM-thin snapshot and verifies its origin/pool metadata.
 create_snapshot() {
     info "Creating LVM-thin snapshot..."
     if dryrun_enabled; then dryrun_cmd lvcreate --snapshot --name "$NEW_LV_NAME" "${SOURCE_VG}/${SOURCE_LV}"
@@ -597,8 +613,6 @@ create_snapshot() {
     [ "$NEW_ORIGIN" = "$SOURCE_LV" ] && [ "$NEW_POOL" = "$SOURCE_POOL" ] || die "Snapshot origin/thin-pool verification failed."
 }
 
-# verify_storage_mapping
-# Verifies the Proxmox volume ID resolves to the exact newly created LV.
 verify_storage_mapping() {
     if dryrun_enabled; then PVE_PATH="$NEW_LV_PATH"; dryrun_verify "Proxmox storage $STORAGE_ID would resolve $NEW_VOLID"
     else PVE_PATH="$(pvesm path "$NEW_VOLID" 2>/dev/null || :)"; fi
@@ -606,63 +620,235 @@ verify_storage_mapping() {
     [ "$(readlink -f "$PVE_PATH")" = "$(readlink -f "$NEW_REAL")" ] || die "Proxmox storage mapping does not point to the new LV."
 }
 
-# attach_snapshot
-# Attaches the verified snapshot volume ID to the selected destination VM slot.
+
+############################################################
+# SETUP / MAIN / END
+############################################################
+
+setup() {
+    define_colours
+    PROJECT_VERSION="3.2.0"; SCRIPT_VERSION="3.2.0"
+    MODE="hot"; MODE_ARG=""
+    ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
+    SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
+    SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
+    REQUESTED_DEST_DISK=""
+    CREATED=0; ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0
+    parse_arguments "$@"
+    check_elevation
+}
+
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    need_commands lvs lvcreate lvremove qm pvesm blockdev readlink awk grep sed sort tail find
+    resolve_source
+    [ -n "$SOURCE_POOL" ] || { printf 'Source: %s\nLV attributes: %s\n' "$SOURCE_PATH" "$SOURCE_ATTR"; die "Source is not an LVM-thin volume."; }
+    validate_destination_vm
+    select_storage
+    select_disk_name
+    SCSI_DEVICE="$(first_free_scsi "$DEST_VMID")" || die "No free SCSI disk slot is available on VM $DEST_VMID."
+    TARGET_STATUS="$(qm status "$DEST_VMID" 2>/dev/null | awk '{print $2}' || :)"
+    print_plan
+    install_transaction_traps
+    apply_source_state
+    create_snapshot
+    verify_storage_mapping
+    attach_snapshot
+    restore_source_state
+    verify_result
+    COMPLETE=1
+    trap - 0 HUP INT TERM
+}
+
+end() {
+    print_banner "Snapshot created and attached successfully"
+    printf 'Source:          %s\n' "$SOURCE_PATH"
+    [ -z "$SOURCE_VM" ] || printf 'Source VM:       %s%s\n' "$SOURCE_VM" "${SOURCE_SLOT:+ ($SOURCE_SLOT)}"
+    printf 'Snapshot:        %s\n' "$NEW_LV_PATH"
+    printf 'Proxmox volume:  %s\n' "$NEW_VOLID"
+    printf 'Destination VM:  %s\n' "$DEST_VMID"
+    printf 'Attached as:     %s\n' "$SCSI_DEVICE"
+    printf 'Backing disk:    disk-%s\n' "$DISK_NUMBER"
+    printf 'State mode:      %s\n\n' "$MODE"
+    dryrun_summary
+}
+
+############################################################
+# COMMAND LINE
+############################################################
+
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N] [hot|pause|stop|restart] [dryrun]
+  $(basename "$0") <source-vmid> <disk-N|slot> <dest-vmid> [dest-disk-N] [hot|pause|stop|restart] [dryrun]
+
+DESCRIPTION
+  Creates an LVM-thin snapshot of the source and attaches it to the first free
+  SCSI slot on a destination QEMU VM.
+
+  The source may be a full LV path or VMID plus backing disk number/slot.
+  An optional destination disk number selects the new backing name
+  vm-DESTVMID-disk-N; otherwise the next free number is used.
+
+SOURCE VM STATE
+  default   Hot mode; do not pause or stop the source VM.
+  pause     Pause a running source VM while the snapshot is created/attached.
+  stop      Stop a running source VM and leave it stopped.
+  restart   Stop a running source VM, create/attach the snapshot, then start it.
+
+EXAMPLES
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 disk-3 pause dryrun
+  $(basename "$0") 123 disk-0 456 disk-3 restart dryrun
+
+EOF
+    dryrun_help
+}
+
+parse_arguments() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            dryrun|--dryrun) enable_dryrun ;;
+            hot|pause|stop|restart) set_state_mode "$1" ;;
+            -h|--help) usage; exit 0 ;;
+            --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
+            *)
+                ARG_COUNT=$((ARG_COUNT + 1))
+                case "$ARG_COUNT" in 1) ARG1="$1" ;; 2) ARG2="$1" ;; 3) ARG3="$1" ;; 4) ARG4="$1" ;; *) usage >&2; exit 2 ;; esac
+                ;;
+        esac
+        shift
+    done
+
+    case "$ARG1" in
+        /*)
+            [ "$ARG_COUNT" -ge 2 ] && [ "$ARG_COUNT" -le 3 ] || { usage >&2; exit 2; }
+            SOURCE_FORM="path"; SOURCE_INPUT="$ARG1"; DEST_VMID="$ARG2"
+            if [ "$ARG_COUNT" -eq 3 ]; then REQUESTED_DEST_DISK="$(normalize_disk_number "$ARG3" 2>/dev/null || :)"; [ -n "$REQUESTED_DEST_DISK" ] || die "Destination disk selector must be N or disk-N."; fi
+            ;;
+        *)
+            [ "$ARG_COUNT" -ge 3 ] && [ "$ARG_COUNT" -le 4 ] || { usage >&2; exit 2; }
+            SOURCE_FORM="vm"; SOURCE_VM_INPUT="$ARG1"; SOURCE_SELECTOR="$ARG2"; DEST_VMID="$ARG3"
+            if [ "$ARG_COUNT" -eq 4 ]; then REQUESTED_DEST_DISK="$(normalize_disk_number "$ARG4" 2>/dev/null || :)"; [ -n "$REQUESTED_DEST_DISK" ] || die "Destination disk selector must be N or disk-N."; fi
+            ;;
+    esac
+}
+
+############################################################
+# VALIDATION / PRE-FLIGHT
+############################################################
+
+validate_destination_vm() {
+    require_qemu_vm "$DEST_VMID"
+    TARGET_CONFIG="/etc/pve/qemu-server/${DEST_VMID}.conf"
+    TARGET_QM_CONFIG="$(qm config "$DEST_VMID")"
+    if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE '^lock:[[:space:]]*'; then die "Destination VM $DEST_VMID is locked; resolve the lock first."; fi
+}
+
+select_disk_name() {
+    if [ -n "$REQUESTED_DEST_DISK" ]; then
+        DISK_NUMBER="$REQUESTED_DEST_DISK"
+        NEW_LV_NAME="vm-${DEST_VMID}-disk-${DISK_NUMBER}"
+        NEW_LV_PATH="/dev/${SOURCE_VG}/${NEW_LV_NAME}"
+        NEW_VOLID="${STORAGE_ID}:${NEW_LV_NAME}"
+        if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qF "$NEW_LV_NAME"; then die "Destination VM already references $NEW_LV_NAME."; fi
+        if lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1; then die "Snapshot LV already exists: $NEW_LV_PATH"; fi
+        return 0
+    fi
+
+    sdn_highest="$(printf '%s\n' "$TARGET_QM_CONFIG" | grep -oE "vm-${DEST_VMID}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    if [ -n "$sdn_highest" ]; then DISK_NUMBER=$((sdn_highest + 1)); else DISK_NUMBER=0; fi
+    while :; do
+        NEW_LV_NAME="vm-${DEST_VMID}-disk-${DISK_NUMBER}"
+        NEW_LV_PATH="/dev/${SOURCE_VG}/${NEW_LV_NAME}"
+        NEW_VOLID="${STORAGE_ID}:${NEW_LV_NAME}"
+        sdn_busy=0
+        printf '%s\n' "$TARGET_QM_CONFIG" | grep -qF "$NEW_LV_NAME" && sdn_busy=1 || :
+        lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 && sdn_busy=1 || :
+        [ "$sdn_busy" -eq 0 ] && break
+        DISK_NUMBER=$((DISK_NUMBER + 1))
+    done
+}
+
+############################################################
+# HIGH LEVEL TASKS
+############################################################
+
+print_plan() {
+    print_banner "Create linked disk snapshot and attach to VM"
+    printf 'Source LV:             %s\n' "$SOURCE_PATH"
+    [ -z "$SOURCE_VM" ] || printf 'Source VM:             %s%s\n' "$SOURCE_VM" "${SOURCE_SLOT:+ ($SOURCE_SLOT)}"
+    printf 'Source state mode:     %s\n' "$MODE"
+    printf 'Source VG:             %s\n' "$SOURCE_VG"
+    printf 'Thin pool:             %s\n' "$SOURCE_POOL"
+    printf 'Proxmox storage:       %s\n' "$STORAGE_ID"
+    printf 'Destination VM:        %s\n' "$DEST_VMID"
+    printf 'Destination VM status: %s\n' "${TARGET_STATUS:-unknown}"
+    printf 'New snapshot LV:       %s\n' "$NEW_LV_PATH"
+    printf 'Backing disk number:   disk-%s\n' "$DISK_NUMBER"
+    printf 'Attach as:             %s\n\n' "$SCSI_DEVICE"
+}
+
 attach_snapshot() {
     info "Attaching $NEW_VOLID to VM $DEST_VMID as $SCSI_DEVICE..."
     if ! dryrun_cmd qm set "$DEST_VMID" "--${SCSI_DEVICE}" "$NEW_VOLID"; then
-        if qm config "$DEST_VMID" 2>/dev/null | grep -qF "$NEW_VOLID"; then
-            ATTACHED=1
-            warn "qm reported failure, but the VM config references $NEW_VOLID; the snapshot was not removed."
-        fi
+        if qm config "$DEST_VMID" 2>/dev/null | grep -qF "$NEW_VOLID"; then ATTACHED=1; fi
         die "Could not attach the snapshot to VM $DEST_VMID."
     fi
     ATTACHED=1
 }
 
-# verify_result
-# Checks the important transaction postconditions and preserves attached objects on verification failure.
 verify_result() {
     if dryrun_enabled; then
         dryrun_verify "Snapshot LV would exist"
         dryrun_verify "VM $DEST_VMID would reference $NEW_VOLID at $SCSI_DEVICE"
-        dryrun_verify "Proxmox would resolve $NEW_VOLID"
-        dryrun_verify "Snapshot origin would remain $SOURCE_LV"
+        dryrun_verify "Source guest state would match the requested $MODE mode"
         return 0
     fi
-
-    vr_failed=0; vr_config="$(qm config "$DEST_VMID")"
-    vr_origin="$(lvs --noheadings -o origin "${SOURCE_VG}/${NEW_LV_NAME}" 2>/dev/null | trim)"
-    lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || { warn "Snapshot LV is missing."; vr_failed=1; }
-    printf '%s\n' "$vr_config" | grep -qE "^${SCSI_DEVICE}:.*${NEW_VOLID}([,[:space:]]|$)" || { warn "Expected disk attachment was not found."; vr_failed=1; }
-    pvesm path "$NEW_VOLID" >/dev/null 2>&1 || { warn "Proxmox cannot resolve $NEW_VOLID."; vr_failed=1; }
-    [ "$vr_origin" = "$SOURCE_LV" ] || { warn "Unexpected snapshot origin: ${vr_origin:-unknown}"; vr_failed=1; }
-    [ "$vr_failed" -eq 0 ] || die "Verification failed. The volume may already be attached, so it was not removed."
+    lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || die "Snapshot LV is missing."
+    vr_config="$(qm config "$DEST_VMID")"
+    printf '%s\n' "$vr_config" | grep -qE "^${SCSI_DEVICE}:.*${NEW_VOLID}([,[:space:]]|$)" || die "Expected snapshot attachment is missing."
+    vr_origin="$(lvs --noheadings -o origin "${SOURCE_VG}/${NEW_LV_NAME}" | trim)"
+    [ "$vr_origin" = "$SOURCE_LV" ] || die "Snapshot origin verification failed."
 }
 
 ############################################################
 # ERROR HANDLING / CLEANUP
 ############################################################
 
-# cleanup_on_exit
-# Removes only a newly created unattached object after an incomplete transaction.
+install_transaction_traps() {
+    trap cleanup_on_exit 0
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
 cleanup_on_exit() {
     coe_status=$?
     trap - 0 HUP INT TERM
-    if dryrun_enabled || [ "$CREATED" -eq 0 ] || [ "$ATTACHED" -eq 1 ] || [ "$COMPLETE" -eq 1 ]; then
-        [ "$coe_status" -eq 0 ] || exit "$coe_status"
-        return 0
-    fi
-    if qm config "$DEST_VMID" 2>/dev/null | grep -qF "$NEW_VOLID"; then
-        warn "VM configuration references $NEW_VOLID; refusing automatic snapshot removal."
-        [ "$coe_status" -eq 0 ] || exit "$coe_status"
-        return 0
-    fi
-    warn "Removing incomplete/unattached snapshot: $NEW_LV_PATH"
     set +e
-    lvremove -y "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || warn "Could not remove $NEW_LV_PATH automatically."
+
+    if [ "$MODE" = "pause" ] && [ "$PAUSED_BY_US" -eq 1 ] && [ -n "$SOURCE_VM" ]; then
+        if dryrun_enabled; then dryrun_cmd qm resume "$SOURCE_VM"; else qm resume "$SOURCE_VM" >/dev/null 2>&1; fi
+        PAUSED_BY_US=0
+    elif [ "$MODE" = "restart" ] && [ "$STOPPED_BY_US" -eq 1 ] && [ -n "$SOURCE_VM" ]; then
+        if dryrun_enabled; then dryrun_cmd qm start "$SOURCE_VM"; else qm start "$SOURCE_VM" >/dev/null 2>&1; fi
+        STOPPED_BY_US=0
+    fi
+
+    if ! dryrun_enabled && [ "$CREATED" -eq 1 ] && [ "$ATTACHED" -eq 0 ] && [ "$COMPLETE" -eq 0 ]; then
+        if ! guest_volume_references | grep -F "|$NEW_VOLID" >/dev/null 2>&1; then
+            warn "Removing incomplete/unattached snapshot: $NEW_LV_PATH"
+            lvremove -y "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || warn "Could not remove $NEW_LV_PATH automatically."
+        fi
+    fi
+
     set -e
     [ "$coe_status" -eq 0 ] || exit "$coe_status"
+    return 0
 }
 
 ############################################################

@@ -1,8 +1,8 @@
 # Proxmox LongTail Toil
 
-**Proxmox LongTail Toil** is a collection of 38 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
+**Proxmox LongTail Toil** is a collection of 40 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
 
-## The 38 helpers
+## The 40 helpers
 
 ### VM identity, recovery and inspection
 
@@ -268,26 +268,50 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-snapshot-and-add-to-vm.sh`
 
-Create an LVM-thin snapshot of a source LV and attach it to another QEMU VM.
+Create an LVM-thin snapshot from either a full LV path or `VMID + disk-N`, then attach it to a destination VM; optionally choose the destination backing disk number and use `pause`, `stop`, or `restart` on the source VM.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-add-to-vm.sh" -O "create-disk-snapshot-and-add-to-vm.sh" && chmod +x "create-disk-snapshot-and-add-to-vm.sh"
 ```
 
 ```sh
-./create-disk-snapshot-and-add-to-vm.sh /dev/pve/vm-123-disk-0 456 dryrun
+./create-disk-snapshot-and-add-to-vm.sh 123 disk-0 456 disk-3 pause dryrun
 ```
 
 #### `create-disk-copy-and-add-to-vm.sh`
 
-Create a full independent copy of an LV and attach it to a destination QEMU VM.
+Create a full verified copy from either a full LV path or `VMID + disk-N`, attach it to a destination VM, optionally choose the destination backing disk number/VG, and optionally `pause`, `stop`, or `restart` the source VM.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
 ```
 
 ```sh
-./create-disk-copy-and-add-to-vm.sh /dev/pve/vm-123-disk-0 456 fastvg dryrun
+./create-disk-copy-and-add-to-vm.sh 123 disk-0 456 disk-3 fastvg restart dryrun
+```
+
+#### `create-disk-copy-and-overwrite-disk-on-vm.sh`
+
+Create and byte-verify an independent copy of the source, replace an existing destination VM disk with it, and preserve the displaced destination volume as `unusedN`; source and destination may each be given by full LV path or `VMID + disk-N`.
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-overwrite-disk-on-vm.sh" -O "create-disk-copy-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-copy-and-overwrite-disk-on-vm.sh"
+```
+
+```sh
+./create-disk-copy-and-overwrite-disk-on-vm.sh 123 disk-0 456 disk-1 pause dryrun
+```
+
+#### `create-disk-snapshot-and-overwrite-disk-on-vm.sh`
+
+Create an LVM-thin snapshot of the source, replace an existing destination VM disk with that linked snapshot, and preserve the displaced destination volume as `unusedN`; source and destination may each be given by full LV path or `VMID + disk-N`.
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-overwrite-disk-on-vm.sh" -O "create-disk-snapshot-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-snapshot-and-overwrite-disk-on-vm.sh"
+```
+
+```sh
+./create-disk-snapshot-and-overwrite-disk-on-vm.sh /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 restart dryrun
 ```
 
 #### `copy-disk-between-vms.sh`
@@ -526,7 +550,7 @@ The v3.0.1 POSIX implementation was exercised by the repository's disposable int
 
 The validated run covered all 36 command cases, including real `qm`, `pvesm`, LVM/device-mapper, mount/umount, `qemu-img`, storage move/import/export, snapshot, rename, delete, recovery and VMID-change operations. Dry-run before/after snapshots remained unchanged, and protected guest/LVM/storage state returned to baseline with no detected anomalies.
 
-Version 3.1.0 adds `list-all-vm-lvm.sh` and `move-disk-to-vm.sh`; both are included in the expanded 38-command integration matrix. Run the suite on your Proxmox host before treating a new release build as validated for your environment.
+Version 3.2.0 adds the two overwrite helpers and expands the source/destination/state syntax of the existing create-and-add helpers. The integration matrix now covers all 40 commands. Run the suite on your Proxmox host before treating this feature release as validated for your environment.
 
 Run the same suite on your own host:
 
@@ -569,6 +593,8 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
+- [v3.2.0 disk create/overwrite helpers](docs/V3.2.0-DISK-CREATE-OVERWRITE.md)
+- [v3.2.0 pre-integration validation](docs/V3.2.0-STATIC-VALIDATION.md)
 - [v3.1.0 new helpers](docs/V3.1.0-NEW-HELPERS.md)
 - [v3.1.0 pre-integration validation](docs/V3.1.0-STATIC-VALIDATION.md)
 - [GitHub publishing checklist](docs/GITHUB-PUBLISHING-CHECKLIST.md)

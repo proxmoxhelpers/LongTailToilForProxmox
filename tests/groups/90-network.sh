@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.1.0"
-    TEST_SUITE_VERSION="2.1.0"
+    PROJECT_VERSION="3.2.0"
+    TEST_SUITE_VERSION="2.2.0"
     TEST_GROUP="network"
     test_reset_counters
     test_parse_arguments "$@"

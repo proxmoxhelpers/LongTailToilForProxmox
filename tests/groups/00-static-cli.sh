@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.1.0"
-    TEST_SUITE_VERSION="2.1.0"
+    PROJECT_VERSION="3.2.0"
+    TEST_SUITE_VERSION="2.2.0"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -95,7 +95,7 @@ finish_static_run() {
 print_plan() {
     print_banner "Static / CLI tests"
     printf '%s\n' "No test has been executed. Re-run with --run to:"
-    printf '%s\n' "  - parse all 38 v3 commands and canonical maintenance libraries with /bin/sh"
+    printf '%s\n' "  - parse all 40 v3 commands and canonical maintenance libraries with /bin/sh"
     printf '%s\n' "  - prove each top-level command runs help/version when copied completely alone"
     printf '%s\n' "  - require /bin/sh entry-point shebangs and reject known Bash-only constructs"
     printf '%s\n' "  - test --version and --help without root/Proxmox preflight"
@@ -112,7 +112,7 @@ print_plan() {
 test_all_script_syntax() {
     tas_count=0
     for tas_script in "$PROJECT_ROOT"/*.sh; do sh -n "$tas_script"; tas_count=$((tas_count + 1)); done
-    [ "$tas_count" -eq 38 ] || { printf 'Expected 38 project commands, found %s.\n' "$tas_count" >&2; return 1; }
+    [ "$tas_count" -eq 40 ] || { printf 'Expected 40 project commands, found %s.\n' "$tas_count" >&2; return 1; }
     for tas_lib in "$PROJECT_ROOT"/lib/*.sh; do sh -n "$tas_lib"; done
 }
 
@@ -143,7 +143,7 @@ test_all_standalone() {
 
         (cd "$tas_dir" && /bin/sh "./$tas_name" --help >/dev/null)
         tas_version="$(cd "$tas_dir" && /bin/sh "./$tas_name" --version)"
-        printf '%s\n' "$tas_version" | grep -F "(project 3.1.0)" >/dev/null || return 1
+        printf '%s\n' "$tas_version" | grep -F "(project 3.2.0)" >/dev/null || return 1
     done
 }
 
@@ -205,7 +205,7 @@ test_no_short_circuit_die() {
 test_all_versions() {
     for tav_script in "$PROJECT_ROOT"/*.sh; do
         tav_output="$(sh "$tav_script" --version)"
-        printf '%s\n' "$tav_output" | grep -F "(project 3.1.0)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
+        printf '%s\n' "$tav_output" | grep -F "(project 3.2.0)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
     done
 }
 

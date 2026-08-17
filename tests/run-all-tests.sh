@@ -10,8 +10,8 @@ SCRIPT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.1.0"
-    TEST_SUITE_VERSION="2.1.0"
+    PROJECT_VERSION="3.2.0"
+    TEST_SUITE_VERSION="2.2.0"
     ALL_RUN="false"
     ALL_VERBOSE="false"
     parse_arguments "$@"

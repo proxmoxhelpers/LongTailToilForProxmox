@@ -1,13 +1,28 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.1.0**  
-Project target: **3.1.0**
+Test suite version: **2.2.0**  
+Project target: **3.2.0**
 
-This suite exercises all 38 project commands on a real Proxmox node while avoiding production storage and guests.
+This suite exercises all 40 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.2.0 — v3.2.0 disk create/overwrite expansion
+
+Project v3.2.0 adds two standalone overwrite helpers and expands both existing create-and-add helpers:
+
+```text
+create-disk-copy-and-overwrite-disk-on-vm.sh
+create-disk-snapshot-and-overwrite-disk-on-vm.sh
+```
+
+The source can now be expressed as either a full LVM path or `VMID + disk-N`/slot. The two overwrite helpers accept the destination as either a full LVM path or `VMID + disk-N`/slot, preserve the displaced destination volume as `unusedN`, and support hot/pause/stop/restart destination-state modes.
+
+The existing copy/snapshot-and-add helpers now accept the same flexible source syntax, optional destination backing disk numbers, and hot/pause/stop/restart source-state modes.
+
+The `50-copy-snapshot.sh` group adds real disposable tests for both overwrite helpers in addition to the existing copy/snapshot cases.
 
 ## v2.1.0 — v3.1.0 long-tail additions
 
