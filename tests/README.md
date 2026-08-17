@@ -1,13 +1,35 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.0.2**  
-Project target: **3.0.1**
+Test suite version: **2.1.0**  
+Project target: **3.1.0**
 
-This suite exercises all 36 project commands on a real Proxmox node while avoiding production storage and guests.
+This suite exercises all 38 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.1.0 — v3.1.0 long-tail additions
+
+Project v3.1.0 adds two standalone helpers and expands the integration matrix to **38 commands**:
+
+```text
+list-all-vm-lvm.sh
+move-disk-to-vm.sh
+```
+
+The inspection group verifies that referenced LVM volumes are grouped under their VMIDs and that an intentionally orphaned LV appears in the remaining-volume section.
+
+The disk-lifecycle group exercises both `move-disk-to-vm.sh` CLI forms against disposable LVM-thin volumes and covers all four source-state behaviors:
+
+```text
+default hot-swap
+pause -> suspend/detach/resume
+stop -> stop/detach/leave stopped
+restart -> stop/detach/start
+```
+
+Every mutating path is dry-run checked first and the group still compares protected host state after cleanup.
 
 ## v2.0.1 — v3.0.1 set -e regression fixes
 

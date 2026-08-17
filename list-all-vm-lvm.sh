@@ -382,79 +382,199 @@ dryrun_summary() {
 }
 
 
-
 ############################################################
 # SETUP / MAIN / END
 ############################################################
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.1.0"; SCRIPT_VERSION="3.0.0"
-    SLOT=""
+    PROJECT_VERSION="3.1.0"; SCRIPT_VERSION="1.0.0"
+    ALL_LVS_FILE=""; REFS_FILE=""; SORTED_REFS_FILE=""
     parse_arguments "$@"
-    check_elevation
 }
 
 main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs qm pvesm findmnt readlink dmsetup
-    validate_attach
-    attach_volume
+    need_commands lvs pvesm find awk sed grep sort mktemp cp
+    build_lvm_catalog
+    collect_guest_lvm_references
+    print_guest_lvm_groups
+    print_remaining_lvs
 }
 
-end() { dryrun_summary; }
+end() { cleanup_files; }
 
 ############################################################
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <full-lv-path> <vmid> [scsiN] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") [dryrun]
+
+DESCRIPTION
+  Lists every LVM logical volume referenced by Proxmox QEMU/LXC guests,
+  grouped under the guest VMID, followed by all remaining LVM volumes.
+
+  "Remaining" includes normal host/system LVs and orphaned VM-style LVs
+  that are not referenced by any visible Proxmox guest configuration.
+
+EOF
+    dryrun_help
+}
 
 parse_arguments() {
-    pa_count=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
             -h|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
-            *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) LV="$1" ;; 2) VMID="$1" ;; 3) SLOT="$1" ;; *) usage >&2; exit 2 ;; esac ;;
+            *) usage >&2; exit 2 ;;
         esac
         shift
     done
-    [ "$pa_count" -ge 2 ] && [ "$pa_count" -le 3 ] || { usage >&2; exit 2; }
 }
 
 ############################################################
-# VALIDATION / PRE-FLIGHT
+# DISCOVERY
 ############################################################
 
-# validate_attach
-# Resolves the LV, verifies exclusive ownership and selects a free SCSI slot.
-validate_attach() {
-    assert_lv_exists "$LV"; require_qemu_vm "$VMID"
-    LV="$(canonical_lv_path "$LV")"; assert_lv_idle "$LV"
-    VOLID="$(volid_for_lv "$LV")"
-    [ -z "$(other_volume_references "$VOLID")" ] || die "Volume is already referenced by another guest."
-    [ -n "$SLOT" ] || SLOT="$(first_free_scsi "$VMID")"
-    case "$SLOT" in
-        scsi[0-9]|scsi1[0-9]|scsi2[0-9]|scsi30) ;;
-        *) die "Slot must be scsi0..scsi30." ;;
-    esac
-    [ -z "$(disk_value "$VMID" "$SLOT")" ] || die "$SLOT is already occupied."
-    info "LV: $LV"; info "VM: $VMID"; info "Attach: $SLOT -> $VOLID"
+# build_lvm_catalog
+#
+# Description:
+#   Captures visible LVs once with stable UUID identity and display metadata.
+#
+# Usage:
+#   build_lvm_catalog
+#
+# Arguments:
+#   None.
+#
+# Output:
+#   ALL_LVS_FILE columns: uuid|path|vg|lv|size|pool|origin
+#
+# Returns:
+#   0 after the catalog is built.
+############################################################
+build_lvm_catalog() {
+    install_temp_cleanup
+    ALL_LVS_FILE="$(mktemp)" || die "Unable to create LVM catalog."; register_temp_file "$ALL_LVS_FILE"
+    REFS_FILE="$(mktemp)" || die "Unable to create reference catalog."; register_temp_file "$REFS_FILE"
+    SORTED_REFS_FILE="$(mktemp)" || die "Unable to create sorted reference catalog."; register_temp_file "$SORTED_REFS_FILE"
+
+    lvs --noheadings --separator '|' -o lv_uuid,lv_path,vg_name,lv_name,lv_size,pool_lv,origin 2>/dev/null |
+        awk -F'|' '{
+            for (i=1; i<=7; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+            if ($1 != "" && $2 != "") print $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7
+        }' | sort -t'|' -k3,3 -k4,4 > "$ALL_LVS_FILE"
+}
+
+# collect_guest_lvm_references
+#
+# Description:
+#   Resolves every storage-backed guest reference through pvesm, keeps only
+#   references that resolve to an LV in ALL_LVS_FILE, and records the guest
+#   VMID/type/name/slot against the LV UUID.
+#
+# Usage:
+#   collect_guest_lvm_references
+#
+# Arguments:
+#   None.
+#
+# Output:
+#   REFS_FILE columns: vmid|type|name|slot|volid|uuid|path
+#
+# Returns:
+#   0 after all visible QEMU/LXC configurations are inspected.
+############################################################
+collect_guest_lvm_references() {
+    : > "$REFS_FILE"
+    all_guest_configs | while IFS= read -r cglr_cfg; do
+        [ -n "$cglr_cfg" ] || continue
+        cglr_id="${cglr_cfg##*/}"; cglr_id="${cglr_id%.conf}"
+        case "$cglr_id" in ''|*[!0-9]*) continue ;; esac
+
+        case "$cglr_cfg" in
+            */lxc/*) cglr_type="LXC"; cglr_name="$(awk -F': ' '$1=="hostname" {print $2; exit}' "$cglr_cfg")" ;;
+            *) cglr_type="QEMU"; cglr_name="$(awk -F': ' '$1=="name" {print $2; exit}' "$cglr_cfg")" ;;
+        esac
+        [ -n "$cglr_name" ] || cglr_name="-"
+
+        config_volume_references "$cglr_cfg" | while IFS='|' read -r cglr_slot cglr_volid; do
+            [ -n "$cglr_volid" ] || continue
+            cglr_path="$(pvesm path "$cglr_volid" 2>/dev/null || :)"
+            [ -n "$cglr_path" ] || continue
+            lvs "$cglr_path" >/dev/null 2>&1 || continue
+            cglr_uuid="$(lvs --noheadings -o lv_uuid "$cglr_path" 2>/dev/null | trim)"
+            [ -n "$cglr_uuid" ] || continue
+            cglr_catalog_path="$(awk -F'|' -v u="$cglr_uuid" '$1==u {print $2; exit}' "$ALL_LVS_FILE")"
+            [ -n "$cglr_catalog_path" ] || continue
+            printf '%s|%s|%s|%s|%s|%s|%s\n' "$cglr_id" "$cglr_type" "$cglr_name" "$cglr_slot" "$cglr_volid" "$cglr_uuid" "$cglr_catalog_path"
+        done
+    done | sort -t'|' -k1,1n -k4,4 -u > "$REFS_FILE"
+
+    cp "$REFS_FILE" "$SORTED_REFS_FILE"
+    return 0
 }
 
 ############################################################
-# HIGH LEVEL TASKS
+# RESULTS
 ############################################################
 
-# attach_volume
-# Attaches the resolved Proxmox volume and verifies the exact slot reference.
-attach_volume() {
-    dryrun_cmd qm set "$VMID" "--$SLOT" "$VOLID"
-    if dryrun_enabled; then dryrun_verify "VM $VMID would reference $VOLID at $SLOT"
-    else [ "$(disk_volid "$VMID" "$SLOT")" = "$VOLID" ] || die "Attachment verification failed."; fi
-    ok "Attached $VOLID to VM $VMID as $SLOT."
+# print_guest_lvm_groups
+# Prints referenced LVs grouped beneath each VMID.
+print_guest_lvm_groups() {
+    pglg_last=""
+    if [ ! -s "$SORTED_REFS_FILE" ]; then
+        section "VM / CT LVM volumes"
+        printf '%s\n' "(none)"
+        return 0
+    fi
+
+    while IFS='|' read -r pglg_id pglg_type pglg_name pglg_slot pglg_volid pglg_uuid pglg_path; do
+        if [ "$pglg_id" != "$pglg_last" ]; then
+            [ -z "$pglg_last" ] || printf '\n'
+            printf '%sVM %s%s  %s(%s) %s%s\n' "$C_BOLD$C_CYAN" "$pglg_id" "$C_RESET" "$C_CYAN" "$pglg_type" "$pglg_name" "$C_RESET"
+            printf '  %-10s %-38s %-12s %-16s %s\n' SLOT LVM_PATH SIZE POOL ORIGIN
+            pglg_last="$pglg_id"
+        fi
+        pglg_meta="$(awk -F'|' -v u="$pglg_uuid" '$1==u {print $5 "|" $6 "|" $7; exit}' "$ALL_LVS_FILE")"
+        pglg_size="${pglg_meta%%|*}"; pglg_rest="${pglg_meta#*|}"; pglg_pool="${pglg_rest%%|*}"; pglg_origin="${pglg_rest#*|}"
+        [ -n "$pglg_pool" ] || pglg_pool="-"; [ -n "$pglg_origin" ] || pglg_origin="-"
+        printf '  %-10s %-38s %-12s %-16s %s\n' "$pglg_slot" "$pglg_path" "$pglg_size" "$pglg_pool" "$pglg_origin"
+    done < "$SORTED_REFS_FILE"
+    return 0
+}
+
+# print_remaining_lvs
+# Prints every visible LV UUID that was not referenced by any guest.
+print_remaining_lvs() {
+    section "Remaining LVM volumes"
+    printf '%-38s %-12s %-16s %s\n' LVM_PATH SIZE POOL ORIGIN
+    prl_count=0
+    while IFS='|' read -r prl_uuid prl_path prl_vg prl_lv prl_size prl_pool prl_origin; do
+        if awk -F'|' -v u="$prl_uuid" '$6==u {found=1; exit} END {exit(found ? 0 : 1)}' "$REFS_FILE"; then continue; fi
+        [ -n "$prl_pool" ] || prl_pool="-"; [ -n "$prl_origin" ] || prl_origin="-"
+        printf '%-38s %-12s %-16s %s\n' "$prl_path" "$prl_size" "$prl_pool" "$prl_origin"
+        prl_count=$((prl_count + 1))
+    done < "$ALL_LVS_FILE"
+    [ "$prl_count" -gt 0 ] || printf '%s\n' "(none)"
+    return 0
+}
+
+############################################################
+# GENERAL HELPERS
+############################################################
+
+# cleanup_files
+# Removes only temporary catalogs created by this invocation.
+cleanup_files() {
+    [ -z "$ALL_LVS_FILE" ] || rm -f "$ALL_LVS_FILE"
+    [ -z "$REFS_FILE" ] || rm -f "$REFS_FILE"
+    [ -z "$SORTED_REFS_FILE" ] || rm -f "$SORTED_REFS_FILE"
 }
 
 ############################################################

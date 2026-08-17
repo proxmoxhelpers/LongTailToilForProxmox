@@ -2,6 +2,21 @@
 
 All notable project changes are summarized here.
 
+## 3.1.0 — 2026-08-17
+
+Two new standalone helpers.
+
+- Added `list-all-vm-lvm.sh` to group guest-referenced LVM volumes under QEMU/LXC VMIDs and then list every remaining visible LV.
+- Added `move-disk-to-vm.sh` with two source forms:
+  - `<full-lv-path> <destination-vmid>`
+  - `<source-vmid> <disk-number|slot> <destination-vmid>`
+- `move-disk-to-vm.sh` defaults to live hot-swap and accepts `pause`, `stop`, or `restart` anywhere on the command line.
+- The transfer preserves the existing LV without copying, deleting, or renaming it and attaches it to the destination VM's first free SCSI slot.
+- Active-source transfers detach before destination attach so the same writable LV is never intentionally attached to two running VMs at once.
+- Added best-effort rollback when an active source was detached but destination attachment fails before touching the destination config.
+- Expanded the real Proxmox integration matrix from 36 to 38 commands, including both CLI forms and all source-state modes.
+- Public helpers remain self-contained single files.
+
 ## 3.0.1 — 2026-08-15
 
 Integration-validated POSIX baseline.

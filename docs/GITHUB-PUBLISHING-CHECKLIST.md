@@ -28,7 +28,7 @@ homelab
 - [ ] Confirm the MIT copyright holder/name in `LICENSE`.
 - [ ] Add the direct URL for the Proxmox forum thread that inspired the project, if desired.
 - [ ] Decide whether `main` will be the default branch.
-- [ ] Decide whether v3.0.1 should be tagged immediately as the first public release.
+- [ ] Decide whether v3.1.0 should be tagged immediately as the first public release.
 - [ ] Confirm the repository is public.
 - [ ] Enable Issues if community bug reports are wanted.
 - [ ] Enable GitHub private vulnerability reporting if available.
@@ -45,7 +45,7 @@ From the repository root:
 git init
 git branch -M main
 git add .
-git commit -m "Initial public release: Proxmox LongTail Toil v3.0.1"
+git commit -m "Initial public release: Proxmox LongTail Toil v3.1.0"
 git remote add origin https://github.com/proxmoxhelpers/Proxmox-LongTailToil.git
 git push -u origin main
 ```
@@ -55,24 +55,24 @@ git push -u origin main
 Tag:
 
 ```text
-v3.0.1
+v3.1.0
 ```
 
 Title:
 
 ```text
-Proxmox LongTail Toil v3.0.1
+Proxmox LongTail Toil v3.1.0
 ```
 
 Short release summary:
 
-> First public integration-validated POSIX release. Includes 36 Proxmox/LVM helpers, project-wide dry-run support, grouped disposable integration tests, and the v3 shell/testing documentation.
+> First public integration-validated POSIX release. Includes 38 Proxmox/LVM helpers, project-wide dry-run support, grouped disposable integration tests, and the v3 shell/testing documentation.
 
 Suggested commands:
 
 ```sh
-git tag -a v3.0.1 -m "Proxmox LongTail Toil v3.0.1"
-git push origin v3.0.1
+git tag -a v3.1.0 -m "Proxmox LongTail Toil v3.1.0"
+git push origin v3.1.0
 ```
 
 ## Repository settings worth enabling

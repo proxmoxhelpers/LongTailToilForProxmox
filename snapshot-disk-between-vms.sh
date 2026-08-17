@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.0.1"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.1.0"; SCRIPT_VERSION="3.0.0"
     parse_arguments "$@"
     check_elevation
 }
@@ -825,7 +825,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.0.1"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.1.0"; SCRIPT_VERSION="3.0.0"
     CREATED=0; ATTACHED=0; COMPLETE=0
     parse_arguments "$@"
     check_elevation

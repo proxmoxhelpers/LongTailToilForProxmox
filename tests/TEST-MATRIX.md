@@ -1,4 +1,4 @@
-# Test Coverage Matrix — v3.0.1
+# Test Coverage Matrix — v3.1.0
 
 Every executable project command is covered by at least one group.
 
@@ -26,19 +26,21 @@ Every executable project command is covered by at least one group.
 | 20 | `find-volume-owner.sh` | `10-inspection.sh` | resolves test LV back to test VM config |
 | 21 | `fix-vm-volume-names.sh` | `60-disk-config.sh` | dry-run + real repair of intentionally mismatched test LV |
 | 22 | `import-disk-and-attach.sh` | `70-storage-io.sh` | dry-run + real small raw-image import |
-| 23 | `list-vm-disks.sh` | `10-inspection.sh` | lists attached disposable test LV |
-| 24 | `mount-vm-disk.sh` | `30-mount.sh` | dry-run + real read-only mount via VM slot |
-| 25 | `mount-vm-drives.sh` | `30-mount.sh` | dry-run + real read-only direct-LV mount |
-| 26 | `mount-vm-root.sh` | `30-mount.sh` | dry-run + real synthetic Linux-root detection |
-| 27 | `move-disk-to-storage.sh` | `70-storage-io.sh` | dry-run + real move between test storages |
-| 28 | `move-lvm.sh` | `20-lvm.sh` | dry-run + real cross-VG move |
-| 29 | `recover-vm-from-volumes.sh` | `80-vm-config.sh` | dry-run + real recovery from orphaned test LV |
-| 30 | `rename-lvm.sh` | `20-lvm.sh` | dry-run + real test-LV rename |
-| 31 | `renumber-vm-disks.sh` | `60-disk-config.sh` | dry-run + real 3/7 → 0/1 test-volume renumber |
-| 32 | `replace-vm-disk.sh` | `60-disk-config.sh` | dry-run + real replacement with test LV |
-| 33 | `set-vm-boot-disk.sh` | `60-disk-config.sh` | dry-run + real boot-order update |
-| 34 | `snapshot-disk-between-vms.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot between test VMs |
-| 35 | `swap-vm-disks.sh` | `60-disk-config.sh` | dry-run + real config slot swap |
-| 36 | `unmount-vm-drives.sh` | `30-mount.sh` | dry-run proves mount remains + real unmount |
+| 23 | `list-all-vm-lvm.sh` | `10-inspection.sh` | read-only grouping of referenced LVs by VMID + remaining-LV list |
+| 24 | `list-vm-disks.sh` | `10-inspection.sh` | lists attached disposable test LV |
+| 25 | `mount-vm-disk.sh` | `30-mount.sh` | dry-run + real read-only mount via VM slot |
+| 26 | `mount-vm-drives.sh` | `30-mount.sh` | dry-run + real read-only direct-LV mount |
+| 27 | `mount-vm-root.sh` | `30-mount.sh` | dry-run + real synthetic Linux-root detection |
+| 28 | `move-disk-to-storage.sh` | `70-storage-io.sh` | dry-run + real move between test storages |
+| 29 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | dry-run immutability + real full-path/VM-disk moves + hot/pause/stop/restart modes |
+| 30 | `move-lvm.sh` | `20-lvm.sh` | dry-run + real cross-VG move |
+| 31 | `recover-vm-from-volumes.sh` | `80-vm-config.sh` | dry-run + real recovery from orphaned test LV |
+| 32 | `rename-lvm.sh` | `20-lvm.sh` | dry-run + real test-LV rename |
+| 33 | `renumber-vm-disks.sh` | `60-disk-config.sh` | dry-run + real 3/7 → 0/1 test-volume renumber |
+| 34 | `replace-vm-disk.sh` | `60-disk-config.sh` | dry-run + real replacement with test LV |
+| 35 | `set-vm-boot-disk.sh` | `60-disk-config.sh` | dry-run + real boot-order update |
+| 36 | `snapshot-disk-between-vms.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot between test VMs |
+| 37 | `swap-vm-disks.sh` | `60-disk-config.sh` | dry-run + real config slot swap |
+| 38 | `unmount-vm-drives.sh` | `30-mount.sh` | dry-run proves mount remains + real unmount |
 
-In addition, `00-static-cli.sh` parses all 36 commands and canonical maintenance libraries with `/bin/sh`, requires `/bin/sh` entry-point shebangs, proves every public helper works when copied alone into an empty directory, scans for prohibited Bash constructs, exercises `--help`/`--version`, and tests both `dryrun --version` and `--version dryrun` for all 36 commands.
+In addition, `00-static-cli.sh` parses all 38 commands and canonical maintenance libraries with `/bin/sh`, requires `/bin/sh` entry-point shebangs, proves every public helper works when copied alone into an empty directory, scans for prohibited Bash constructs, exercises `--help`/`--version`, and tests both `dryrun --version` and `--version dryrun` for all 38 commands.

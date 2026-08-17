@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.0.1"
-    TEST_SUITE_VERSION="2.0.1"
+    PROJECT_VERSION="3.1.0"
+    TEST_SUITE_VERSION="2.1.0"
     TEST_GROUP="inspection"
     test_reset_counters
     test_parse_arguments "$@"
@@ -28,6 +28,7 @@ main() {
     create_storage_sandbox
     prepare_inspection_fixture
     run_case "list-vm-disks.sh" test_list_vm_disks
+    run_case "list-all-vm-lvm.sh" test_list_all_vm_lvm
     run_case "find-volume-owner.sh" test_find_volume_owner
     run_case "find-orphaned-volumes.sh" test_find_orphaned_volumes
     run_case "audit-vm-storage.sh" test_audit_vm_storage
@@ -46,7 +47,7 @@ end() {
 print_plan() {
     print_banner "Inspection / audit tests"
     printf '%s\n' "Disposable fixture: two loopback VGs, one stopped VM, one attached LV and one orphan LV."
-    printf '%s\n' "Commands: list-vm-disks, find-volume-owner, find-orphaned-volumes, audit-vm-storage."
+    printf '%s\n' "Commands: list-vm-disks, list-all-vm-lvm, find-volume-owner, find-orphaned-volumes, audit-vm-storage."
     printf '%s\n' "All four commands are read-only; no production guest or production LV is referenced."
 }
 
@@ -73,6 +74,15 @@ test_list_vm_disks() {
     tlvd_out="$TEST_DATA_DIR/list-vm-disks.txt"
     project_cmd list-vm-disks.sh "$INSPECT_VM" > "$tlvd_out"
     assert_contains "$tlvd_out" "$TEST_STORAGE_A:$INSPECT_LV_NAME"
+}
+
+test_list_all_vm_lvm() {
+    tal_out="$TEST_DATA_DIR/list-all-vm-lvm.txt"
+    project_cmd list-all-vm-lvm.sh > "$tal_out"
+    assert_contains "$tal_out" "VM $INSPECT_VM"
+    assert_contains "$tal_out" "$INSPECT_LV"
+    assert_contains "$tal_out" "Remaining LVM volumes"
+    assert_contains "$tal_out" "$INSPECT_ORPHAN_LV"
 }
 
 test_find_volume_owner() {

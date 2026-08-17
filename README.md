@@ -1,8 +1,8 @@
 # Proxmox LongTail Toil
 
-**Proxmox LongTail Toil** is a collection of 36 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
+**Proxmox LongTail Toil** is a collection of 38 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
 
-## The 36 helpers
+## The 38 helpers
 
 ### VM identity, recovery and inspection
 
@@ -52,6 +52,18 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 ```sh
 ./list-vm-disks.sh 123
+```
+
+#### `list-all-vm-lvm.sh`
+
+List every LVM volume referenced by QEMU/LXC guests grouped under its VMID, then show all remaining LVM volumes.
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/list-all-vm-lvm.sh" -O "list-all-vm-lvm.sh" && chmod +x "list-all-vm-lvm.sh"
+```
+
+```sh
+./list-all-vm-lvm.sh
 ```
 
 #### `audit-vm-storage.sh`
@@ -191,6 +203,18 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ```
 
 ### VM disk lifecycle
+
+#### `move-disk-to-vm.sh`
+
+Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; default is live hot-swap, with optional `pause`, `stop`, or `restart` control for the source VM.
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-disk-to-vm.sh" -O "move-disk-to-vm.sh" && chmod +x "move-disk-to-vm.sh"
+```
+
+```sh
+./move-disk-to-vm.sh 123 0 456 pause dryrun
+```
 
 #### `attach-existing-lvm-to-vm.sh`
 
@@ -502,6 +526,8 @@ The v3.0.1 POSIX implementation was exercised by the repository's disposable int
 
 The validated run covered all 36 command cases, including real `qm`, `pvesm`, LVM/device-mapper, mount/umount, `qemu-img`, storage move/import/export, snapshot, rename, delete, recovery and VMID-change operations. Dry-run before/after snapshots remained unchanged, and protected guest/LVM/storage state returned to baseline with no detected anomalies.
 
+Version 3.1.0 adds `list-all-vm-lvm.sh` and `move-disk-to-vm.sh`; both are included in the expanded 38-command integration matrix. Run the suite on your Proxmox host before treating a new release build as validated for your environment.
+
 Run the same suite on your own host:
 
 ```sh
@@ -543,6 +569,8 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
+- [v3.1.0 new helpers](docs/V3.1.0-NEW-HELPERS.md)
+- [v3.1.0 pre-integration validation](docs/V3.1.0-STATIC-VALIDATION.md)
 - [GitHub publishing checklist](docs/GITHUB-PUBLISHING-CHECKLIST.md)
 - [MIT License](LICENSE)
 
