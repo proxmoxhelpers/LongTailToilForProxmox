@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.0.0"
     DEST="scsi"
     parse_arguments "$@"
     check_elevation
@@ -400,6 +400,7 @@ main() {
     need_commands qm cp sed grep
     require_qemu_vm "$VMID"; require_guest_stopped "$VMID"
     select_destination
+    sanitize_destination_value
     change_bus
 }
 
@@ -455,13 +456,27 @@ select_destination() {
 
 # change_bus
 # Backs up the VM config, rewrites the disk-slot key, and verifies the exact value at the new slot.
+sanitize_destination_value() {
+    DEST_VALUE="$VALUE"
+    case "$DEST" in
+        sata[0-9]*|ide[0-9]*)
+            sdv_new="$(printf '%s\n' "$DEST_VALUE" | sed 's/,iothread=[^,]*//g')"
+            if [ "$sdv_new" != "$DEST_VALUE" ]; then
+                warn "Removing iothread option because $DEST does not accept it."
+                DEST_VALUE="$sdv_new"
+            fi
+            ;;
+    esac
+}
+
 change_bus() {
     dryrun_cmd cp "$CONFIG" "$BACKUP"
     dryrun_cmd sed -i "s/^${SRC}:/${DEST}:/" "$CONFIG"
+    if [ "$DEST_VALUE" != "$VALUE" ]; then dryrun_cmd sed -i "/^${DEST}:/ s/,iothread=[^,]*//g" "$CONFIG"; fi
     if dryrun_enabled; then
-        dryrun_verify "$SRC would move to $DEST with its existing disk options"
+        dryrun_verify "$SRC would move to $DEST with all destination-compatible disk options"
     else
-        if [ "$(disk_value "$VMID" "$DEST")" != "$VALUE" ] || [ -n "$(disk_value "$VMID" "$SRC")" ]; then
+        if [ "$(disk_value "$VMID" "$DEST")" != "$DEST_VALUE" ] || [ -n "$(disk_value "$VMID" "$SRC")" ]; then
             cp "$BACKUP" "$CONFIG"; die "Verification failed; config restored."
         fi
     fi

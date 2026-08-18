@@ -390,7 +390,7 @@ dryrun_summary() {
 setup() {
     define_colours
     define_format_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="1.1.0"
+    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="1.1.0"
     ALL_LVS_FILE=""; REFS_FILE=""; PARTS_FILE=""
     parse_arguments "$@"
 }
@@ -702,7 +702,7 @@ inspect_disk() {
     [ -n "$id_pttype" ] || id_pttype="none"
 
     : > "$PARTS_FILE"
-    partx --show --raw --noheadings -o NR,START,SECTORS,TYPE "$id_path" > "$PARTS_FILE" 2>/dev/null || :
+    partx --show --noheadings -o NR,START,SECTORS,TYPE "$id_path" > "$PARTS_FILE" 2>/dev/null || :
 
     printf '    Partition table: %s\n' "$id_pttype"
     printf '    %-7s %-11s %-11s %-24s %-18s %s\n' PART START SIZE TABLE_HINT CONTENT_FORMAT NOTE

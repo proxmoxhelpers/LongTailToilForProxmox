@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="storage-io"
     test_reset_counters
     test_parse_arguments "$@"
@@ -146,17 +146,15 @@ test_export_disk() {
     [ ! -e "$ted_qcow" ] || { printf 'Dry-run unexpectedly created qcow2 output.\n' >&2; return 1; }
     project_cmd export-vm-disk.sh "$ted_vm" scsi0 "$ted_qcow" qcow2
     assert_file_exists "$ted_qcow"
-    [ "$(qemu-img info --output=json "$ted_qcow" | tr -d '\n ' | grep -o '"format":"[^"]*"' | head -n1)" = '"format":"qcow2"' ]
-    ted_roundtrip="$TEST_DATA_DIR/exported-roundtrip.raw"
-    qemu-img convert -O raw "$ted_qcow" "$ted_roundtrip"
-    cmp -n 33554432 "$ted_src" "$ted_roundtrip"
+    qemu-img info --output=json "$ted_qcow" | grep -Eq '"format"[[:space:]]*:[[:space:]]*"qcow2"' || { printf 'Exported qcow2 did not report qcow2 format.\n' >&2; return 1; }
+    qemu-img compare -f raw -F qcow2 "$ted_src" "$ted_qcow" >/dev/null || { printf 'Exported qcow2 logical contents differ from source LV.\n' >&2; return 1; }
 
     ted_raw="$TEST_DATA_DIR/exported.raw"
     run_dryrun_unchanged "export-disk-default-raw" export-vm-disk.sh "$ted_vm" scsi0 "$ted_raw"
     [ ! -e "$ted_raw" ] || { printf 'Dry-run unexpectedly created raw output.\n' >&2; return 1; }
     project_cmd export-vm-disk.sh "$ted_vm" scsi0 "$ted_raw"
-    [ "$(qemu-img info --output=json "$ted_raw" | tr -d '\n ' | grep -o '"format":"[^"]*"' | head -n1)" = '"format":"raw"' ]
-    cmp -n 33554432 "$ted_src" "$ted_raw"
+    qemu-img info --output=json "$ted_raw" | grep -Eq '"format"[[:space:]]*:[[:space:]]*"raw"' || { printf 'Exported raw image did not report raw format.\n' >&2; return 1; }
+    cmp -n 33554432 "$ted_src" "$ted_raw" || { printf 'Exported raw bytes differ from source LV.\n' >&2; return 1; }
 }
 
 test_change_storage_prefix() {

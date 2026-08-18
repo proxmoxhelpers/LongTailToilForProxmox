@@ -154,7 +154,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `delete-lvm.sh`
 
-Delete an LVM logical volume with explicit confirmation and post-delete verification.
+Delete an LVM logical volume with exact `DELETE` confirmation and post-delete verification; cancellation exits non-zero for automation-safe refusal handling.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/delete-lvm.sh" -O "delete-lvm.sh" && chmod +x "delete-lvm.sh"
@@ -230,7 +230,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `move-disk-to-vm.sh`
 
-Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; numeric selectors understand both `vm-` and `base-` names (including an unambiguous stale embedded VMID), with hot/pause/stop/restart source-state control.
+Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; numeric selectors understand both `vm-` and `base-` names, with hot/pause/stop/restart source-state control. Source `unusedN` cleanup is config-only so removing the stale source reference cannot free the moved LV.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-disk-to-vm.sh" -O "move-disk-to-vm.sh" && chmod +x "move-disk-to-vm.sh"
@@ -378,7 +378,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `change-disk-bus.sh`
 
-Move a VM disk configuration from one bus/slot to another while preserving its disk options.
+Move a VM disk configuration from one bus/slot to another while preserving destination-compatible disk options; incompatible `iothread` is removed with a warning when moving to SATA/IDE.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-disk-bus.sh" -O "change-disk-bus.sh" && chmod +x "change-disk-bus.sh"
@@ -587,9 +587,11 @@ Protected-host comparisons include pre-existing VG/PV/LV metadata, canonical sto
 
 The last fully documented real-Proxmox integration-validated POSIX baseline is **v3.0.1**, whose then-current 36-command suite completed cleanly with dry-run state unchanged and protected guest/LVM/storage state returned to baseline.
 
-The current **v3.4.2** release candidate contains 42 standalone helpers and an expanded **84-case** real integration definition plus static/CLI contracts. The suite now covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
+The current **v3.4.3** release candidate contains 42 standalone helpers and an expanded **84-case** real integration definition plus static/CLI contracts. The suite now covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
 
-The v3.4.2 harness also protects more host state than the earlier baseline: it records local guest runtime status and firewall checksums, samples disposable LV content for dry-run/refusal comparisons, and uses layered cleanup that stops rather than guessing when ownership cannot be proven.
+The v3.4.3 harness also protects more host state than the earlier baseline: it records local guest runtime status and firewall checksums, samples disposable LV content for dry-run/refusal comparisons, and uses layered cleanup that stops rather than guessing when ownership cannot be proven.
+
+The first full v3.4.2 real-host attempt exposed several useful regressions before promotion: an invalid `partx --show --raw` combination, destructive source-`unusedN` cleanup in `move-disk-to-vm.sh`, an undefined test-only `trim` dependency, a bus-incompatible `iothread` option, an invalid rootless LXC network fixture, brittle export assertions, and two test expectation/exit-status issues. v3.4.3 contains targeted fixes and static regressions for those findings; it still requires a fresh real-host rerun.
 
 Run the full current suite on a disposable or non-production Proxmox node:
 
@@ -597,7 +599,7 @@ Run the full current suite on a disposable or non-production Proxmox node:
 ./tests/run-all-tests.sh --run --verbose
 ```
 
-A v3.4.2 build should be described as **release-candidate / statically validated** until that real-host run finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
+A v3.4.3 build should be described as **release-candidate / statically validated** until that real-host run finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
 
 ## Why this exists
 
@@ -644,6 +646,8 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [v3.4.1 static validation](docs/V3.4.1-STATIC-VALIDATION.md)
 - [v3.4.2 full test/safety audit](docs/V3.4.2-TEST-AUDIT.md)
 - [v3.4.2 static validation](docs/V3.4.2-STATIC-VALIDATION.md)
+- [v3.4.3 real-integration triage and fixes](docs/V3.4.3-REAL-INTEGRATION-TRIAGE.md)
+- [v3.4.3 static validation](docs/V3.4.3-STATIC-VALIDATION.md)
 - [Current command-by-command test matrix](tests/TEST-MATRIX.md)
 - [v3.2.3 empty-target behavior](docs/V3.2.3-EMPTY-TARGET.md)
 - [v3.2.3 static validation](docs/V3.2.3-STATIC-VALIDATION.md)

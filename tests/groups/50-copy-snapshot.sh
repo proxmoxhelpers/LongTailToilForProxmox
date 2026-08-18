@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -96,7 +96,7 @@ prepare_copy_fixture() {
     attach_test_lv "$COPY_OVERWRITE_VM" "$TEST_STORAGE_B" "$COPY_OVERWRITE_OLD_NAME" scsi0
     COPY_OVERWRITE_OCCUPIED_ARCHIVE_NAME="vm-${COPY_OVERWRITE_VM}-disk-901"
     COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_NAME" 16M)"
-    COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)"
+    COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | awk '{$1=$1;print}')"
 
     SNAP_OVERWRITE_VM="$(create_test_vm snapshot-overwrite)"
     SNAP_OVERWRITE_OLD_NAME="vm-${SNAP_OVERWRITE_VM}-disk-0"
@@ -105,7 +105,7 @@ prepare_copy_fixture() {
     attach_test_lv "$SNAP_OVERWRITE_VM" "$TEST_STORAGE_B" "$SNAP_OVERWRITE_OLD_NAME" scsi0
     SNAP_OVERWRITE_OCCUPIED_ARCHIVE_NAME="vm-${SNAP_OVERWRITE_VM}-disk-901"
     SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_NAME" 16M)"
-    SNAP_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)"
+    SNAP_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV" | awk '{$1=$1;print}')"
 
 
     COPY_OVERWRITE_DELETE_VM="$(create_test_vm copy-overwrite-delete)"
@@ -115,6 +115,7 @@ prepare_copy_fixture() {
     attach_test_lv "$COPY_OVERWRITE_DELETE_VM" "$TEST_STORAGE_B" "$COPY_OVERWRITE_DELETE_OLD_NAME" scsi0
 
     SNAP_OVERWRITE_DELETE_VM="$(create_test_vm snapshot-overwrite-delete)"
+    qm set "$SNAP_OVERWRITE_DELETE_VM" --scsihw virtio-scsi-pci >/dev/null
     SNAP_OVERWRITE_DELETE_OLD_NAME="vm-${SNAP_OVERWRITE_DELETE_VM}-disk-0"
     SNAP_OVERWRITE_DELETE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_DELETE_OLD_NAME" 32M)"
     write_test_pattern "$SNAP_OVERWRITE_DELETE_OLD_LV" "snapshot-overwrite-delete-old"
@@ -192,7 +193,7 @@ test_create_add_state_modes() {
     project_cmd create-disk-snapshot-and-add-to-vm.sh "$COPY_SRC_LV" "$COPY_STATE_DST_VM" ide pause
     [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
     tsa_pause_volid="$(qm config "$COPY_STATE_DST_VM" | sed -n 's/^ide0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
-    [ "$(lvs --noheadings -o origin "$(pvesm path "$tsa_pause_volid")" | trim)" = "$COPY_SRC_LV_NAME" ]
+    [ "$(lvs --noheadings -o origin "$(pvesm path "$tsa_pause_volid")" | awk '{$1=$1;print}')" = "$COPY_SRC_LV_NAME" ]
 
     run_dryrun_unchanged "create-copy-add-stop" create-disk-copy-and-add-to-vm.sh stop "$COPY_SRC_VM" disk-0 "$COPY_STATE_DST_VM" sata "$TEST_VG_B"
     project_cmd create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_STATE_DST_VM" sata "$TEST_VG_B" stop
@@ -235,7 +236,7 @@ test_create_base_snapshot_add() {
     tcbsa_volid="$(qm config "$BASE_DST_VM" | sed -n 's/^scsi1:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tcbsa_volid" = "$TEST_STORAGE_A:$tcbsa_name" ]
     assert_lv_exists "$TEST_VG_A/$tcbsa_name"
-    [ "$(lvs --noheadings -o origin "/dev/${TEST_VG_A}/${tcbsa_name}" | trim)" = "$BASE_SRC_NAME" ]
+    [ "$(lvs --noheadings -o origin "/dev/${TEST_VG_A}/${tcbsa_name}" | awk '{$1=$1;print}')" = "$BASE_SRC_NAME" ]
 }
 
 test_create_base_copy_add() {
@@ -251,7 +252,7 @@ test_create_base_copy_add() {
 
 test_create_base_snapshot_overwrite() {
     tcbso_old_name="base-${BASE_OVERWRITE_VM}-disk-0"
-    tcbso_old_uuid="$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbso_old_name}" | trim)"
+    tcbso_old_uuid="$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbso_old_name}" | awk '{$1=$1;print}')"
     tcbso_final_volid="$TEST_STORAGE_A:$tcbso_old_name"
     tcbso_archive_name="base-${BASE_OVERWRITE_VM}-disk-901"
     tcbso_archive_volid="$TEST_STORAGE_B:$tcbso_archive_name"
@@ -262,14 +263,14 @@ test_create_base_snapshot_overwrite() {
 
     [ "$(qm config "$BASE_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)" = "$tcbso_final_volid" ]
     assert_lv_exists "$TEST_VG_A/$tcbso_old_name"
-    [ "$(lvs --noheadings -o origin "/dev/${TEST_VG_A}/${tcbso_old_name}" | trim)" = "$BASE_SRC_NAME" ]
-    [ "$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbso_archive_name}" | trim)" = "$tcbso_old_uuid" ]
+    [ "$(lvs --noheadings -o origin "/dev/${TEST_VG_A}/${tcbso_old_name}" | awk '{$1=$1;print}')" = "$BASE_SRC_NAME" ]
+    [ "$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbso_archive_name}" | awk '{$1=$1;print}')" = "$tcbso_old_uuid" ]
     qm config "$BASE_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcbso_archive_volid}([,[:space:]]|$)" >/dev/null
 }
 
 test_create_copy_overwrite() {
     tcow_old_volid="$TEST_STORAGE_B:$COPY_OVERWRITE_OLD_NAME"
-    tcow_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OLD_LV" | trim)"
+    tcow_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OLD_LV" | awk '{$1=$1;print}')"
     tcow_archive_name="vm-${COPY_OVERWRITE_VM}-disk-902"
     tcow_archive_volid="$TEST_STORAGE_B:$tcow_archive_name"
     tcow_archive_path="/dev/${TEST_VG_B}/${tcow_archive_name}"
@@ -283,18 +284,18 @@ test_create_copy_overwrite() {
     tcow_new_volid="$(qm config "$COPY_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tcow_new_volid" = "$tcow_old_volid" ]
     tcow_new_path="$(pvesm path "$tcow_new_volid")"
-    tcow_new_uuid="$(lvs --noheadings -o lv_uuid "$tcow_new_path" | trim)"
+    tcow_new_uuid="$(lvs --noheadings -o lv_uuid "$tcow_new_path" | awk '{$1=$1;print}')"
     [ "$tcow_new_uuid" != "$tcow_old_uuid" ]
     cmp -n 33554432 "$COPY_SRC_LV" "$tcow_new_path"
 
-    [ "$(lvs --noheadings -o lv_uuid "$tcow_archive_path" | trim)" = "$tcow_old_uuid" ]
-    [ "$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)" = "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
+    [ "$(lvs --noheadings -o lv_uuid "$tcow_archive_path" | awk '{$1=$1;print}')" = "$tcow_old_uuid" ]
+    [ "$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | awk '{$1=$1;print}')" = "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
     qm config "$COPY_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcow_archive_volid}([,[:space:]]|$)" >/dev/null
     qm config "$COPY_OVERWRITE_VM" | grep -qE '^boot:.*order=scsi0([;,]|$)'
 }
 
 test_create_snapshot_overwrite() {
-    tsow_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OLD_LV" | trim)"
+    tsow_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OLD_LV" | awk '{$1=$1;print}')"
     tsow_final_name="$SNAP_OVERWRITE_OLD_NAME"
     tsow_final_volid="$TEST_STORAGE_A:$tsow_final_name"
     tsow_archive_name="vm-${SNAP_OVERWRITE_VM}-disk-902"
@@ -310,17 +311,17 @@ test_create_snapshot_overwrite() {
     tsow_new_volid="$(qm config "$SNAP_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tsow_new_volid" = "$tsow_final_volid" ]
     tsow_new_path="$(pvesm path "$tsow_new_volid")"
-    tsow_origin="$(lvs --noheadings -o origin "$tsow_new_path" | trim)"
+    tsow_origin="$(lvs --noheadings -o origin "$tsow_new_path" | awk '{$1=$1;print}')"
     [ "$tsow_origin" = "$COPY_SRC_LV_NAME" ]
 
-    [ "$(lvs --noheadings -o lv_uuid "$tsow_archive_path" | trim)" = "$tsow_old_uuid" ]
-    [ "$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)" = "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
+    [ "$(lvs --noheadings -o lv_uuid "$tsow_archive_path" | awk '{$1=$1;print}')" = "$tsow_old_uuid" ]
+    [ "$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV" | awk '{$1=$1;print}')" = "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
     qm config "$SNAP_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tsow_archive_volid}([,[:space:]]|$)" >/dev/null
     qm config "$SNAP_OVERWRITE_VM" | grep -qE '^boot:.*order=scsi0([;,]|$)'
 }
 
 test_create_copy_overwrite_delete() {
-    tcod_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_DELETE_OLD_LV" | trim)"
+    tcod_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_DELETE_OLD_LV" | awk '{$1=$1;print}')"
     tcod_final_volid="$TEST_STORAGE_B:$COPY_OVERWRITE_DELETE_OLD_NAME"
     tcod_archive_name="vm-${COPY_OVERWRITE_DELETE_VM}-disk-901"
     tcod_archive_path="/dev/${TEST_VG_B}/${tcod_archive_name}"
@@ -339,7 +340,7 @@ test_create_copy_overwrite_delete() {
 }
 
 test_create_snapshot_overwrite_delete() {
-    tsod_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_DELETE_OLD_LV" | trim)"
+    tsod_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_DELETE_OLD_LV" | awk '{$1=$1;print}')"
     tsod_final_name="$SNAP_OVERWRITE_DELETE_OLD_NAME"
     tsod_final_volid="$TEST_STORAGE_A:$tsod_final_name"
     tsod_archive_name="vm-${SNAP_OVERWRITE_DELETE_VM}-disk-901"
@@ -353,7 +354,7 @@ test_create_snapshot_overwrite_delete() {
     tsod_new_volid="$(qm config "$SNAP_OVERWRITE_DELETE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tsod_new_volid" = "$tsod_final_volid" ]
     tsod_new_path="$(pvesm path "$tsod_new_volid")"
-    [ "$(lvs --noheadings -o origin "$tsod_new_path" | trim)" = "$COPY_SRC_LV_NAME" ]
+    [ "$(lvs --noheadings -o origin "$tsod_new_path" | awk '{$1=$1;print}')" = "$COPY_SRC_LV_NAME" ]
     lvs "$tsod_archive_path" >/dev/null 2>&1 && return 1
     lvs --noheadings -o lv_uuid 2>/dev/null | grep -F "$tsod_old_uuid" >/dev/null && return 1
     ! qm config "$SNAP_OVERWRITE_DELETE_VM" | grep -F "$tsod_archive_name" >/dev/null
@@ -385,7 +386,7 @@ test_create_snapshot_overwrite_empty() {
 
     [ "$(qm config "$SNAP_EMPTY_VM" | sed -n 's/^sata0:[[:space:]]*//p' | head -n1 | cut -d, -f1)" = "$tsoe_final_volid" ]
     lvs "$tsoe_final_path" >/dev/null 2>&1
-    [ "$(lvs --noheadings -o origin "$tsoe_final_path" | trim)" = "$COPY_SRC_LV_NAME" ]
+    [ "$(lvs --noheadings -o origin "$tsoe_final_path" | awk '{$1=$1;print}')" = "$COPY_SRC_LV_NAME" ]
     qm config "$SNAP_EMPTY_VM" | grep -qE '^boot:.*order=sata0([;,]|$)'
     ! qm config "$SNAP_EMPTY_VM" | grep -E '^unused[0-9]+:' >/dev/null
     ! lvs "${TEST_VG_A}/vm-${SNAP_EMPTY_VM}-disk-901" >/dev/null 2>&1
@@ -405,7 +406,7 @@ test_copy_between_vms() {
 ' "$tcbv_new" | awk 'NF {n++} END {print n+0}')" -eq 1 ]
     case "$tcbv_new" in "$TEST_STORAGE_B":*) ;; *) return 1 ;; esac
     tcbv_path="$(pvesm path "$tcbv_new")"
-    [ -z "$(lvs --noheadings -o origin "$tcbv_path" | trim)" ]
+    [ -z "$(lvs --noheadings -o origin "$tcbv_path" | awk '{$1=$1;print}')" ]
     cmp -n 33554432 "$COPY_SRC_LV" "$tcbv_path"
 }
 
@@ -422,7 +423,7 @@ test_snapshot_between_vms() {
     [ "$(printf '%s
 ' "$tsbv_new" | awk 'NF {n++} END {print n+0}')" -eq 1 ]
     tsbv_path="$(pvesm path "$tsbv_new")"
-    [ "$(lvs --noheadings -o origin "$tsbv_path" | trim)" = "$COPY_SRC_LV_NAME" ]
+    [ "$(lvs --noheadings -o origin "$tsbv_path" | awk '{$1=$1;print}')" = "$COPY_SRC_LV_NAME" ]
 }
 
 test_clone_single_disk() {
@@ -439,7 +440,7 @@ test_clone_single_disk() {
 ' "$tcsd_new" | awk 'NF {n++} END {print n+0}')" -eq 1 ]
     case "$tcsd_new" in "$TEST_STORAGE_B":*) ;; *) return 1 ;; esac
     tcsd_path="$(pvesm path "$tcsd_new")"
-    [ -z "$(lvs --noheadings -o origin "$tcsd_path" | trim)" ]
+    [ -z "$(lvs --noheadings -o origin "$tcsd_path" | awk '{$1=$1;print}')" ]
     cmp -n 33554432 "$COPY_SRC_LV" "$tcsd_path"
 }
 

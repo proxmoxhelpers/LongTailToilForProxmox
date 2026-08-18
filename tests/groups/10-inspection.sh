@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="inspection"
     test_reset_counters
     test_parse_arguments "$@"
@@ -112,8 +112,8 @@ prepare_inspection_fixture() {
     truncate -s 8M "$INSPECT_FS_IMAGE"
     mkfs.ext4 -F -q "$INSPECT_FS_IMAGE"
     INSPECT_FS_SECTOR="$(blockdev --getss "$INSPECT_FS_LV")"
-    INSPECT_FS_P1="$(partx --show --raw --noheadings -o NR,START "$INSPECT_FS_LV" | awk '$1==1 {print $2; exit}')"
-    INSPECT_FS_P2="$(partx --show --raw --noheadings -o NR,START "$INSPECT_FS_LV" | awk '$1==2 {print $2; exit}')"
+    INSPECT_FS_P1="$(partx --show --noheadings -o NR,START "$INSPECT_FS_LV" | awk '$1==1 {print $2; exit}')"
+    INSPECT_FS_P2="$(partx --show --noheadings -o NR,START "$INSPECT_FS_LV" | awk '$1==2 {print $2; exit}')"
     [ -n "$INSPECT_FS_P1" ] && [ -n "$INSPECT_FS_P2" ] || die "Could not determine disposable partition offsets."
     dd if="$INSPECT_FS_IMAGE" of="$INSPECT_FS_LV" bs="$INSPECT_FS_SECTOR" seek="$INSPECT_FS_P1" conv=notrunc,fsync 2>/dev/null
     dd if="$INSPECT_FS_IMAGE" of="$INSPECT_FS_LV" bs="$INSPECT_FS_SECTOR" seek="$INSPECT_FS_P2" conv=notrunc,fsync 2>/dev/null

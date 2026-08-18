@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="disk-lifecycle"
     test_reset_counters
     test_parse_arguments "$@"
@@ -235,6 +235,7 @@ test_move_hot() {
 
 test_move_pause() {
     prepare_one_move move-pause 1
+    qm set "$MOVE_CASE_SRC" --scsihw virtio-scsi-pci >/dev/null
     qm start "$MOVE_CASE_SRC" >/dev/null
     run_dryrun_unchanged "move-disk-to-vm-pause" move-disk-to-vm.sh pause "$MOVE_CASE_SRC" 1 "$MOVE_CASE_DST"
     project_cmd move-disk-to-vm.sh "$MOVE_CASE_SRC" 1 "$MOVE_CASE_DST" pause

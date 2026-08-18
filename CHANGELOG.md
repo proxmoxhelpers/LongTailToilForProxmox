@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.4.3 — 2026-08-17
+
+Corrections from the first expanded v3.4.2 real-Proxmox integration attempt.
+
+- Fixed a high-severity `move-disk-to-vm.sh` bug where `qm set --delete unusedN` could free the LV after it had been attached to the destination VM. Source-unused cleanup and rollback now remove only the exact config reference and re-verify that the LV still exists.
+- Replaced invalid `partx --show --raw` calls with util-linux-compatible read-only `partx --show --noheadings` usage in the filesystem inspector and integration fixtures.
+- Changed `delete-lvm.sh` cancellation to exit non-zero so a refused destructive operation cannot look like successful deletion to automation.
+- `change-disk-bus.sh` now removes incompatible `iothread` when moving to SATA/IDE, warns explicitly, and verifies the destination-compatible value.
+- Fixed the disk-bus default-slot test to expect the actual first-free `scsi4` fixture slot instead of `scsi1`.
+- Removed undefined `trim` calls from the copy/snapshot integration group.
+- Gave the LXC network fixture a disposable test-owned rootfs so `pct set` runs against a valid stopped container.
+- Reworked qcow2 export verification to use `qemu-img compare` for logical contents and clearer diagnostic format assertions.
+- Improved pause-move fixture topology with `virtio-scsi-pci` so the positive pause path tests a hot-unpluggable disk rather than attempting to remove a per-disk SCSI controller.
+- Emergency setup failures now run cleanup and protected after-state comparison, producing anomaly evidence even when a group aborts before registered cases begin.
+- Added six static regressions for the exact real-host failures above.
+- The first v3.4.2 run left all captured protected baseline/after states unchanged for groups that reached normal finish; v3.4.3 still requires a full real-host rerun before promotion.
+
 ## 3.4.2 — 2026-08-17
 
 Full behavior-coverage and integration-harness safety audit.

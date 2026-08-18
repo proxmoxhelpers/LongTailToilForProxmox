@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.0.1"
+    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.0.1"
     parse_arguments "$@"
     check_elevation
 }
@@ -509,7 +509,7 @@ print_volume() {
 confirm_delete() {
     if dryrun_enabled; then CONFIRM="DELETE"; dryrun_print_shell "confirmation: Type DELETE to confirm  # simulated"
     else printf 'Type DELETE to confirm: '; IFS= read -r CONFIRM || CONFIRM=""; fi
-    if [ "$CONFIRM" != "DELETE" ]; then printf '\nCancelled.\n'; exit 0; fi
+    if [ "$CONFIRM" != "DELETE" ]; then printf '\nCancelled.\n' >&2; exit 1; fi
 }
 
 # delete_volume

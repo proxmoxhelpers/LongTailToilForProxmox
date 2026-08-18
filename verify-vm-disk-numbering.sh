@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="1.1.0"
+    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="1.1.0"
     ALL_LVS_FILE=""; REFS_FILE=""
     parse_arguments "$@"
 }

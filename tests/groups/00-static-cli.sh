@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -46,6 +46,12 @@ main() {
     run_case "LXC cleanup uses exact identity and owned-storage guards" test_ct_cleanup_safety_contract
     run_case "Protected baseline includes guest runtime and firewall state" test_protected_runtime_contract
     run_case "Cleanup fails closed between guest/storage/VG layers" test_layered_cleanup_contract
+    run_case "Move-to-VM removes unused references config-only" test_move_to_vm_unused_cleanup_contract
+    run_case "Partition probing avoids mutually exclusive partx modes" test_partx_mode_contract
+    run_case "Integration groups do not depend on undefined trim" test_no_test_trim_contract
+    run_case "delete-lvm cancellation returns failure" test_delete_cancel_contract
+    run_case "Disk-bus changes sanitize incompatible iothread" test_bus_iothread_contract
+    run_case "Emergency cleanup compares protected state" test_emergency_compare_contract
     run_case "--version for all project commands" test_all_versions
     run_case "--help for all project commands" test_all_help
     run_case "dryrun before --version for all commands" test_all_dryrun_prefix
@@ -332,7 +338,7 @@ test_inspection_helper_contract() {
     grep -F 'CONTENT_FORMAT' "$tih_fs" >/dev/null || return 1
     grep -F 'MISMATCH: table says' "$tih_fs" >/dev/null || return 1
     grep -F 'blkid -p -o value -s TYPE -O' "$tih_fs" >/dev/null || return 1
-    grep -F 'partx --show --raw --noheadings -o NR,START,SECTORS,TYPE' "$tih_fs" >/dev/null || return 1
+    grep -F 'partx --show --noheadings -o NR,START,SECTORS,TYPE' "$tih_fs" >/dev/null || return 1
     grep -F 'Microsoft reserved|none' "$tih_fs" >/dev/null || return 1
     grep -F 'Solaris /usr / ZFS|zfs' "$tih_fs" >/dev/null || return 1
 
@@ -553,6 +559,57 @@ test_layered_cleanup_contract() {
     grep -F 'refusing VG/loop cleanup' "$tlcc_common" >/dev/null || return 1
     grep -F 'owned_vgs_or_loops_remain' "$tlcc_common" >/dev/null || return 1
     grep -F 'retaining sandbox evidence' "$tlcc_common" >/dev/null || return 1
+}
+
+# Prevents move-disk-to-vm from freeing a moved LV while clearing source unusedN.
+test_move_to_vm_unused_cleanup_contract() {
+    tmuc_script="$PROJECT_ROOT/move-disk-to-vm.sh"
+    grep -F 'remove_source_unused_reference_only' "$tmuc_script" >/dev/null || return 1
+    grep -F 'without deleting storage' "$tmuc_script" >/dev/null || return 1
+    if grep -E 'qm set "\$SOURCE_VM" --delete "\$SOURCE_UNUSED"|qm set "\$SOURCE_VM" --delete "\$rsu_slot"' "$tmuc_script" >/dev/null 2>&1; then
+        printf 'move-disk-to-vm.sh still deletes source unusedN through qm.\n' >&2
+        return 1
+    fi
+}
+
+# util-linux partx treats --show and --raw as mutually exclusive modes.
+test_partx_mode_contract() {
+    if grep -R -n -- 'partx --show --raw' "$PROJECT_ROOT"/*.sh "$TEST_ROOT"/groups/[1-9][0-9]-*.sh >/dev/null 2>&1; then
+        printf 'Found invalid partx --show --raw combination.\n' >&2
+        return 1
+    fi
+    grep -F 'partx --show --noheadings -o NR,START,SECTORS,TYPE' "$PROJECT_ROOT/list-all-vm-lvm-filesystems.sh" >/dev/null || return 1
+}
+
+# Test groups must stay self-contained and not call the project-internal trim helper.
+test_no_test_trim_contract() {
+    if grep -R -nE '\|[[:space:]]*trim([[:space:]]|\)|$)' "$TEST_ROOT"/groups/*.sh >/dev/null 2>&1; then
+        printf 'An integration group calls undefined trim.\n' >&2
+        return 1
+    fi
+}
+
+# A wrong destructive confirmation is a refusal, not successful completion.
+test_delete_cancel_contract() {
+    tdc_script="$PROJECT_ROOT/delete-lvm.sh"
+    grep -F 'Cancelled.' "$tdc_script" >/dev/null || return 1
+    grep -F 'exit 1' "$tdc_script" >/dev/null || return 1
+}
+
+# SATA/IDE cannot carry the iothread option accepted by SCSI/virtio disks.
+test_bus_iothread_contract() {
+    tbic_script="$PROJECT_ROOT/change-disk-bus.sh"
+    grep -F 'sanitize_destination_value' "$tbic_script" >/dev/null || return 1
+    grep -F "sed 's/,iothread=[^,]*//g'" "$tbic_script" >/dev/null || return 1
+    grep -F 'does not accept it' "$tbic_script" >/dev/null || return 1
+}
+
+# Setup-time failures must still capture the protected after-state.
+test_emergency_compare_contract() {
+    tecc_lib="$TEST_ROOT/lib/test-common.sh"
+    tecc_body="$(sed -n '/^test_emergency_cleanup()/,/^}/p' "$tecc_lib")"
+    printf '%s\n' "$tecc_body" | grep -F 'test_cleanup_sandbox' >/dev/null || return 1
+    printf '%s\n' "$tecc_body" | grep -F 'compare_protected_state' >/dev/null || return 1
 }
 
 # Verifies normal version output without exercising command preflight.

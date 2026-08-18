@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="mount"
     test_reset_counters
     test_parse_arguments "$@"
@@ -85,7 +85,7 @@ prepare_mount_fixture() {
     umount "$TEST_DATA_DIR/partition-seed"
     rmdir "$TEST_DATA_DIR/partition-seed"
     MOUNT_PART_SECTOR="$(blockdev --getss "$MOUNT_PART_LV")"
-    MOUNT_PART_START="$(partx --show --raw --noheadings -o NR,START "$MOUNT_PART_LV" | awk '$1==1 {print $2; exit}')"
+    MOUNT_PART_START="$(partx --show --noheadings -o NR,START "$MOUNT_PART_LV" | awk '$1==1 {print $2; exit}')"
     [ -n "$MOUNT_PART_START" ] || die "Could not determine test partition offset."
     dd if="$MOUNT_PART_IMAGE" of="$MOUNT_PART_LV" bs="$MOUNT_PART_SECTOR" seek="$MOUNT_PART_START" conv=notrunc,fsync 2>/dev/null
     MOUNT_PART_MAP="$(kpartx -l "$MOUNT_PART_LV" | awk 'NR==1 {print $1}')"

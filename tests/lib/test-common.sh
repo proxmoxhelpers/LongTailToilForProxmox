@@ -814,7 +814,11 @@ test_cleanup_sandbox() {
 test_emergency_cleanup() {
     tec_rc="$1"
     trap - 0 HUP INT TERM
-    if [ "${TEST_RUN:-false}" = "true" ] && [ "${TEST_KEEP:-false}" = "false" ]; then test_cleanup_sandbox; fi
+    set +e
+    if [ "${TEST_RUN:-false}" = "true" ] && [ "${TEST_KEEP:-false}" = "false" ]; then
+        test_cleanup_sandbox
+        if [ -n "${TEST_RESULT_DIR:-}" ] && [ -f "$TEST_RESULT_DIR/baseline.vgs" ]; then compare_protected_state; fi
+    fi
     exit "$tec_rc"
 }
 

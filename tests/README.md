@@ -1,13 +1,32 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.8.0**  
-Project target: **3.4.2**
+Test suite version: **2.8.1**  
+Project target: **3.4.3**
 
 This suite exercises all 42 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.8.1 — v3.4.3 first-real-run corrections
+
+The first full v3.4.2 real-host attempt reached 54 of the 84 integration cases before setup/case failures blocked the rest. It produced 42 passing integration cases and 12 failing cases; 30 cases in the inspection, mount and copy/snapshot groups never started because fixture setup aborted. The static group remained clean.
+
+v2.8.1 fixes the issues exposed by that run without weakening assertions:
+
+- `partx --show --raw` is replaced by the util-linux-compatible `partx --show --noheadings` form in both the filesystem helper and partition fixtures;
+- `move-disk-to-vm.sh` removes source `unusedN` references by direct config-only rewrite and uses the same safe path during rollback, never `qm set --delete unusedN`;
+- the pause move fixture uses a shared `virtio-scsi-pci` controller so the test exercises a hot-unpluggable disk rather than controller removal;
+- all copy/snapshot test-only `trim` calls are replaced by POSIX `awk` trimming;
+- SATA/IDE bus-change tests now expect `iothread` to be removed while preserving compatible options;
+- the omitted-destination bus test checks the actual first-free `scsi4` slot instead of the incorrect `scsi1`;
+- the LXC network fixture now has a disposable test-owned rootfs so `pct set` is testing the helper rather than rejecting an invalid container config;
+- qcow2 export verification uses `qemu-img compare` for logical contents and diagnostic format checks; raw export still uses byte comparison;
+- destructive `delete-lvm.sh` cancellation is required to return non-zero;
+- emergency setup-failure cleanup now captures and compares protected after-state instead of leaving baseline-only evidence.
+
+Six new static regressions lock these exact fixes in.
 
 ## v2.8.0 — v3.4.2 full behavior and harness-safety audit
 

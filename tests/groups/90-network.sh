@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="network"
     test_reset_counters
     test_parse_arguments "$@"
@@ -63,6 +63,9 @@ prepare_network_fixture() {
     NET_VM1="$(create_test_vm net-a)"
     NET_VM2="$(create_test_vm net-b)"
     NET_CT="$(create_test_ct net-ct)"
+    NET_CT_ROOT_NAME="vm-${NET_CT}-disk-0"
+    create_thin_lv "$TEST_VG_A" "$NET_CT_ROOT_NAME" 16M >/dev/null
+    attach_test_ct_lv "$NET_CT" "$TEST_STORAGE_A" "$NET_CT_ROOT_NAME" rootfs 16M
     qm set "$NET_VM1" --net0 "virtio=02:00:00:00:00:11,bridge=$NETWORK_BRIDGE,queues=2" >/dev/null
     qm set "$NET_VM2" --net0 "virtio=02:00:00:00:00:12,bridge=$NETWORK_BRIDGE,queues=4" >/dev/null
     printf 'net0: name=eth0,bridge=%s,hwaddr=02:00:00:00:00:13,type=veth\n' "$NETWORK_BRIDGE" >> "/etc/pve/lxc/${NET_CT}.conf"

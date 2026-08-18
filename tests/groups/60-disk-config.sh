@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"
-    TEST_SUITE_VERSION="2.8.0"
+    PROJECT_VERSION="3.4.3"
+    TEST_SUITE_VERSION="2.8.1"
     TEST_GROUP="disk-config"
     test_reset_counters
     test_parse_arguments "$@"
@@ -89,7 +89,10 @@ test_change_disk_bus() {
     [ -n "$tcdb_before" ] || return 1
     run_dryrun_unchanged "change-disk-bus" change-disk-bus.sh "$CONFIG_VM" scsi1 sata0
     project_cmd change-disk-bus.sh "$CONFIG_VM" scsi1 sata0
-    [ "$(qm config "$CONFIG_VM" | sed -n 's/^sata0:[[:space:]]*//p')" = "$tcdb_before" ]
+    tcdb_after="$(qm config "$CONFIG_VM" | sed -n 's/^sata0:[[:space:]]*//p')"
+    tcdb_expected="$(printf '%s\n' "$tcdb_before" | sed 's/,iothread=[^,]*//g')"
+    [ "$tcdb_after" = "$tcdb_expected" ]
+    ! printf '%s\n' "$tcdb_after" | grep -F ',iothread=' >/dev/null
     ! qm config "$CONFIG_VM" | grep -q '^scsi1:'
 }
 
@@ -111,7 +114,7 @@ test_change_disk_bus_default() {
     tcdbd_before="$(qm config "$CONFIG_VM" | sed -n 's/^scsi3:[[:space:]]*//p')"
     run_dryrun_unchanged "change-disk-bus-default-scsi" change-disk-bus.sh "$CONFIG_VM" scsi3
     project_cmd change-disk-bus.sh "$CONFIG_VM" scsi3
-    [ "$(qm config "$CONFIG_VM" | sed -n 's/^scsi1:[[:space:]]*//p')" = "$tcdbd_before" ]
+    [ "$(qm config "$CONFIG_VM" | sed -n 's/^scsi4:[[:space:]]*//p')" = "$tcdbd_before" ]
     ! qm config "$CONFIG_VM" | grep -q '^scsi3:'
 }
 

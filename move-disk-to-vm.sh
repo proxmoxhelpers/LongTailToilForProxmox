@@ -388,7 +388,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
+    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.4.1"
     MODE="hot"; MODE_ARG=""; ARG1=""; ARG2=""; ARG3=""; ARG_COUNT=0
     REFS_FILE=""; SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_VALUE=""; SOURCE_VOLID=""; SOURCE_ACTIVE=0
     SOURCE_STATUS=""; SOURCE_UNUSED=""; DEST_SLOT=""; DEST_TOUCHED=0; DEST_ATTACHED=0; SOURCE_DETACHED=0
@@ -820,14 +820,55 @@ attach_destination() {
     fi
 }
 
+# remove_source_unused_reference_only SLOT EXPECTED_VOLID
+# Removes only the unusedN config line. It deliberately does not use
+# qm set --delete because Proxmox may free the backing volume.
+remove_source_unused_reference_only() {
+    rsuro_slot="$1"; rsuro_expected="$2"
+    rsuro_config="/etc/pve/qemu-server/${SOURCE_VM}.conf"
+    [ -f "$rsuro_config" ] || return 1
+    rsuro_current="$(disk_volid "$SOURCE_VM" "$rsuro_slot" 2>/dev/null || :)"
+    [ -n "$rsuro_current" ] || return 0
+    [ "$rsuro_current" = "$rsuro_expected" ] || return 1
+
+    if dryrun_enabled; then
+        dryrun_print_shell "remove config-only ${rsuro_slot}: ${rsuro_expected} from $rsuro_config without deleting storage"
+        return 0
+    fi
+
+    rsuro_tmp="$(mktemp)" || return 1
+    if ! awk -v key="$rsuro_slot" -v expected="$rsuro_expected" '
+        BEGIN {prefix=key ": "; found=0; bad=0}
+        index($0,prefix)==1 {
+            rest=substr($0,length(prefix)+1)
+            comma=index(rest,",")
+            if (comma) vol=substr(rest,1,comma-1); else vol=rest
+            if (vol != expected) {bad=1; print; next}
+            found=1
+            next
+        }
+        {print}
+        END {
+            if (bad) exit 42
+            if (!found) exit 43
+        }
+    ' "$rsuro_config" > "$rsuro_tmp"; then
+        rm -f "$rsuro_tmp"
+        return 1
+    fi
+    if ! cat "$rsuro_tmp" > "$rsuro_config"; then rm -f "$rsuro_tmp"; return 1; fi
+    rm -f "$rsuro_tmp"
+    [ -z "$(disk_value "$SOURCE_VM" "$rsuro_slot" 2>/dev/null || :)" ] || return 1
+    assert_lv_exists "$LV"
+}
+
 # remove_source_unused SLOT
 # Removes only the source config's unusedN reference; it never frees the LV.
 remove_source_unused() {
     rsu_slot="$1"; [ -n "$rsu_slot" ] || return 0
     info "Removing source config reference $SOURCE_VM $rsu_slot (LV is preserved)..."
-    dryrun_cmd qm set "$SOURCE_VM" --delete "$rsu_slot"
-    if dryrun_enabled; then dryrun_verify "$rsu_slot would be removed from VM $SOURCE_VM"
-    else [ -z "$(disk_value "$SOURCE_VM" "$rsu_slot")" ] || die "Source unused reference still exists: $rsu_slot"; fi
+    remove_source_unused_reference_only "$rsu_slot" "$SOURCE_VOLID" || die "Could not remove source unused reference without touching storage: $rsu_slot"
+    if dryrun_enabled; then dryrun_verify "$rsu_slot would be removed from VM $SOURCE_VM without freeing $SOURCE_VOLID"; fi
 }
 
 # verify_transfer
@@ -880,9 +921,13 @@ rollback_source_attachment() {
     warn "Destination was not attached; attempting to restore $SOURCE_VM $SOURCE_SLOT."
 
     set +e
-    if [ -n "$SOURCE_UNUSED" ] && [ -n "$(disk_value "$SOURCE_VM" "$SOURCE_UNUSED" 2>/dev/null)" ]; then qm set "$SOURCE_VM" --delete "$SOURCE_UNUSED" >/dev/null 2>&1; fi
-    qm set "$SOURCE_VM" "--$SOURCE_SLOT" "$SOURCE_VALUE" >/dev/null 2>&1
-    rsa_status=$?
+    rsa_cleanup=0
+    if [ -n "$SOURCE_UNUSED" ] && [ -n "$(disk_value "$SOURCE_VM" "$SOURCE_UNUSED" 2>/dev/null)" ]; then
+        remove_source_unused_reference_only "$SOURCE_UNUSED" "$SOURCE_VOLID" >/dev/null 2>&1 || rsa_cleanup=1
+    fi
+    if [ "$rsa_cleanup" -eq 0 ]; then qm set "$SOURCE_VM" "--$SOURCE_SLOT" "$SOURCE_VALUE" >/dev/null 2>&1; rsa_status=$?
+    else rsa_status=1
+    fi
     set -e
 
     if [ "$rsa_status" -eq 0 ] && [ "$(disk_volid "$SOURCE_VM" "$SOURCE_SLOT" 2>/dev/null || :)" = "$SOURCE_VOLID" ]; then

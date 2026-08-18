@@ -1,4 +1,4 @@
-# Test Coverage Matrix — v3.4.2
+# Test Coverage Matrix — v3.4.3
 
 Every public command has at least one non-static integration reference. For mutating commands, the static suite additionally requires at least one `run_dryrun_unchanged` integration case. The matrix describes representative real and negative/variant coverage; it does **not** claim combinatorial testing of every possible argument order, storage backend, filesystem, Proxmox release, or failure injection point.
 
@@ -8,7 +8,7 @@ Every public command has at least one non-static integration reference. For muta
 | 2 | `audit-vm-storage.sh` | `10-inspection.sh` | Read-only audit of disposable VM/storage state. | Read-only contract; no mutation path. |
 | 3 | `bulk-change-vm-network.sh` | `90-network.sh` | Real QEMU + LXC tag/firewall/model update while preserving MAC/other NIC options. | Tag removal/firewall-off; missing-guest preflight refusal before valid targets are touched. |
 | 4 | `bulk-change-vm-storage.sh` | `70-storage-io.sh` | Dry-run + real two-VM storage migration between disposable pools with byte-hash preservation. | Both guests verified; old source LVs must disappear. |
-| 5 | `change-disk-bus.sh` | `60-disk-config.sh` | Exact destination bus/slot change with full option preservation. | Bare-bus first-free, omitted destination default, occupied-slot refusal. |
+| 5 | `change-disk-bus.sh` | `60-disk-config.sh` | Exact destination bus/slot change with destination-compatible option preservation. | Bare-bus first-free, omitted destination default, occupied-slot refusal. |
 | 6 | `change-vm-storage-prefix.sh` | `70-storage-io.sh` | Dry-run + real rewrite between two storage IDs mapped to the same disposable VG. | Exact volume tail/options preserved; all owned QEMU configs checked for old prefix. |
 | 7 | `change-vmid-of-vm.sh` | `80-vm-config.sh` | Dry-run + real QEMU VMID change, template/base change, and LXC rootfs change; LV UUIDs preserved. | Running-QEMU state behavior; destination-ID collision, snapshot, and shared-volume refusals. |
 | 8 | `cleanup-unused-disks.sh` | `40-disk-lifecycle.sh` | Dry-run + real explicit unused-volume cleanup and --all cleanup. | Shared-volume cleanup refusal with exact state unchanged. |
@@ -23,7 +23,7 @@ Every public command has at least one non-static integration reference. For muta
 | 17 | `delete-disk-from-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real deletion of disposable unused and active test disks. | Shared-reference refusal. |
 | 18 | `delete-lvm.sh` | `20-lvm.sh` | Dry-run + explicit DELETE confirmation on disposable LV. | Wrong-confirmation refusal with exact state unchanged. |
 | 19 | `detach-disk-from-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real detach to unusedN. | Running-VM refusal with runtime state verified unchanged. |
-| 20 | `export-vm-disk.sh` | `70-storage-io.sh` | Dry-run no-output proof + real qcow2 and inferred raw exports. | qemu-img format verification and raw byte comparison against source. |
+| 20 | `export-vm-disk.sh` | `70-storage-io.sh` | Dry-run no-output proof + real qcow2 and inferred raw exports; qcow2 logical data verified with qemu-img compare. | qemu-img format verification and raw byte comparison against source. |
 | 21 | `find-orphaned-volumes.sh` | `10-inspection.sh` | Read-only discovery of intentionally orphaned vm- and base-family LVs. | Referenced fixtures must not be reported as orphans. |
 | 22 | `find-volume-owner.sh` | `10-inspection.sh` | Read-only resolution of disposable LV to owning guest/slot. | Managed vm/base fixture coverage. |
 | 23 | `fix-vm-volume-names.sh` | `60-disk-config.sh` | Dry-run + real stale vm- and base-family name repair, including template/base path. | Exact corrected-name collision refusal; family and disk-N preservation. |
@@ -35,7 +35,7 @@ Every public command has at least one non-static integration reference. For muta
 | 29 | `mount-vm-drives.sh` | `30-mount.sh` | Dry-run + real read-only direct-LV mount plus read-write disposable mount. | RW persistence checked by remounting read-only. |
 | 30 | `mount-vm-root.sh` | `30-mount.sh` | Dry-run + real synthetic Linux-root detection from disposable partition. | Detected root content verified. |
 | 31 | `move-disk-to-storage.sh` | `70-storage-io.sh` | Dry-run + real move between disposable storages. | Disk options and first-32MiB hash preserved; old LV removed. |
-| 32 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real full-path, numeric and explicit-slot moves. | hot/pause/stop/restart; base/template numeric selector; ambiguous disk-N refusal then explicit-slot resolution. |
+| 32 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real full-path, numeric and explicit-slot moves. | hot/pause/stop/restart; pause fixture uses hot-unpluggable shared SCSI controller; base/template numeric selector; ambiguous disk-N refusal then explicit-slot resolution. |
 | 33 | `move-lvm.sh` | `20-lvm.sh` | Dry-run + real cross-VG move and same-VG rename branch. | Content hash preserved cross-VG; LV UUID preserved same-VG. |
 | 34 | `recover-vm-from-volumes.sh` | `80-vm-config.sh` | Dry-run + real recovery from two vm-family orphan LVs and base-family auto-VG discovery. | Recovered guest config/storage references verified. |
 | 35 | `rename-lvm.sh` | `20-lvm.sh` | Dry-run + real path-form and VG/old/new-form rename. | LV UUID preserved in both forms. |
