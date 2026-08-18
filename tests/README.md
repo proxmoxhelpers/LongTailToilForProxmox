@@ -1,13 +1,19 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.2.0**  
-Project target: **3.2.0**
+Test suite version: **2.2.1**  
+Project target: **3.2.1**
 
 This suite exercises all 40 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.2.1 — v3.2.1 overwrite disk-number semantics
+
+The two overwrite helpers now preserve the destination backing disk number. A destination `vm-VMID-disk-N` is first detached and renamed to the first free `vm-VMID-disk-901+`; the staged copy/snapshot is then renamed to the original `disk-N` before attachment. The optional `delete` keyword removes the archived old LV only after replacement and state restoration succeed.
+
+The copy/snapshot integration group verifies both preservation and deletion paths for both overwrite helpers.
 
 ## v2.2.0 — v3.2.0 disk create/overwrite expansion
 

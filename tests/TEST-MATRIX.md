@@ -1,4 +1,4 @@
-# Test Coverage Matrix — v3.2.0
+# Test Coverage Matrix — v3.2.1
 
 Every executable project command is covered by at least one group.
 
@@ -17,9 +17,9 @@ Every executable project command is covered by at least one group.
 | 11 | `copy-disk-between-vms.sh` | `50-copy-snapshot.sh` | dry-run + real cross-VM copy |
 | 12 | `copy-lvm.sh` | `20-lvm.sh` | dry-run + real cross-VG independent copy + `cmp` |
 | 13 | `create-disk-copy-and-add-to-vm.sh` | `50-copy-snapshot.sh` | dry-run + real copy to second VG and attach |
-| 14 | `create-disk-copy-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | dry-run + real verified copy replacing a disposable VM disk while preserving old volume |
+| 14 | `create-disk-copy-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | dry-run + real verified copy retaining destination disk-N; preserve-to-disk-901+ and delete paths |
 | 15 | `create-disk-snapshot-and-add-to-vm.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot and attach |
-| 16 | `create-disk-snapshot-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot replacing a disposable VM disk while preserving old volume |
+| 16 | `create-disk-snapshot-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | dry-run + real thin snapshot retaining destination disk-N; preserve-to-disk-901+ and delete paths |
 | 17 | `delete-disk-from-vm.sh` | `40-disk-lifecycle.sh` | dry-run + real test-volume deletion |
 | 18 | `delete-lvm.sh` | `20-lvm.sh` | dry-run + explicit `DELETE` confirmation on test LV |
 | 19 | `detach-disk-from-vm.sh` | `40-disk-lifecycle.sh` | dry-run + real detach to `unusedN` |

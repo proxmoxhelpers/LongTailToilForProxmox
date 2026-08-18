@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.0"
-    TEST_SUITE_VERSION="2.2.0"
+    PROJECT_VERSION="3.2.1"
+    TEST_SUITE_VERSION="2.2.1"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -30,8 +30,10 @@ main() {
     prepare_copy_fixture
     run_case "create-disk-snapshot-and-add-to-vm.sh" test_create_snapshot_add
     run_case "create-disk-copy-and-add-to-vm.sh" test_create_copy_add
-    run_case "create-disk-copy-and-overwrite-disk-on-vm.sh" test_create_copy_overwrite
-    run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh" test_create_snapshot_overwrite
+    run_case "create-disk-copy-and-overwrite-disk-on-vm.sh preserve + same disk number" test_create_copy_overwrite
+    run_case "create-disk-copy-and-overwrite-disk-on-vm.sh delete + same disk number" test_create_copy_overwrite_delete
+    run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh preserve + same disk number" test_create_snapshot_overwrite
+    run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh delete + same disk number" test_create_snapshot_overwrite_delete
     run_case "copy-disk-between-vms.sh" test_copy_between_vms
     run_case "snapshot-disk-between-vms.sh" test_snapshot_between_vms
     run_case "clone-single-vm-disk.sh" test_clone_single_disk
@@ -50,7 +52,7 @@ end() {
 print_plan() {
     print_banner "Copy / snapshot tests"
     printf '%s\n' "Creates stopped source/destination VMs and a 32 MiB thin source disk."
-    printf '%s\n' "Tests same-pool snapshots, independent copies, and copy/snapshot overwrite with old-disk preservation."
+    printf '%s\n' "Tests same-pool snapshots, independent copies, and copy/snapshot overwrite with exact disk-number retention, archive preservation, and delete mode."
     printf '%s\n' "All resulting volumes remain in disposable test storages and are removed during ownership-checked cleanup."
 }
 
@@ -77,6 +79,19 @@ prepare_copy_fixture() {
     SNAP_OVERWRITE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_OLD_NAME" 32M)"
     write_test_pattern "$SNAP_OVERWRITE_OLD_LV" "snapshot-overwrite-old"
     attach_test_lv "$SNAP_OVERWRITE_VM" "$TEST_STORAGE_B" "$SNAP_OVERWRITE_OLD_NAME" scsi0
+
+
+    COPY_OVERWRITE_DELETE_VM="$(create_test_vm copy-overwrite-delete)"
+    COPY_OVERWRITE_DELETE_OLD_NAME="vm-${COPY_OVERWRITE_DELETE_VM}-disk-0"
+    COPY_OVERWRITE_DELETE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_DELETE_OLD_NAME" 32M)"
+    write_test_pattern "$COPY_OVERWRITE_DELETE_OLD_LV" "copy-overwrite-delete-old"
+    attach_test_lv "$COPY_OVERWRITE_DELETE_VM" "$TEST_STORAGE_B" "$COPY_OVERWRITE_DELETE_OLD_NAME" scsi0
+
+    SNAP_OVERWRITE_DELETE_VM="$(create_test_vm snapshot-overwrite-delete)"
+    SNAP_OVERWRITE_DELETE_OLD_NAME="vm-${SNAP_OVERWRITE_DELETE_VM}-disk-0"
+    SNAP_OVERWRITE_DELETE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_DELETE_OLD_NAME" 32M)"
+    write_test_pattern "$SNAP_OVERWRITE_DELETE_OLD_LV" "snapshot-overwrite-delete-old"
+    attach_test_lv "$SNAP_OVERWRITE_DELETE_VM" "$TEST_STORAGE_B" "$SNAP_OVERWRITE_DELETE_OLD_NAME" scsi0
 }
 
 ############################################################
@@ -103,27 +118,80 @@ test_create_copy_add() {
 
 test_create_copy_overwrite() {
     tcow_old_volid="$TEST_STORAGE_B:$COPY_OVERWRITE_OLD_NAME"
+    tcow_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OLD_LV" | trim)"
+    tcow_archive_name="vm-${COPY_OVERWRITE_VM}-disk-901"
+    tcow_archive_volid="$TEST_STORAGE_B:$tcow_archive_name"
+    tcow_archive_path="/dev/${TEST_VG_B}/${tcow_archive_name}"
+
     run_dryrun_unchanged "create-copy-overwrite" create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_VM" disk-0 pause
     project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_VM" disk-0
 
     tcow_new_volid="$(qm config "$COPY_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
-    [ "$tcow_new_volid" != "$tcow_old_volid" ]
+    [ "$tcow_new_volid" = "$tcow_old_volid" ]
     tcow_new_path="$(pvesm path "$tcow_new_volid")"
+    tcow_new_uuid="$(lvs --noheadings -o lv_uuid "$tcow_new_path" | trim)"
+    [ "$tcow_new_uuid" != "$tcow_old_uuid" ]
     cmp -n 33554432 "$COPY_SRC_LV" "$tcow_new_path"
-    qm config "$COPY_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcow_old_volid}([,[:space:]]|$)" >/dev/null
+
+    [ "$(lvs --noheadings -o lv_uuid "$tcow_archive_path" | trim)" = "$tcow_old_uuid" ]
+    qm config "$COPY_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcow_archive_volid}([,[:space:]]|$)" >/dev/null
 }
 
 test_create_snapshot_overwrite() {
-    tsow_old_volid="$TEST_STORAGE_B:$SNAP_OVERWRITE_OLD_NAME"
+    tsow_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OLD_LV" | trim)"
+    tsow_final_name="$SNAP_OVERWRITE_OLD_NAME"
+    tsow_final_volid="$TEST_STORAGE_A:$tsow_final_name"
+    tsow_archive_name="vm-${SNAP_OVERWRITE_VM}-disk-901"
+    tsow_archive_volid="$TEST_STORAGE_B:$tsow_archive_name"
+    tsow_archive_path="/dev/${TEST_VG_B}/${tsow_archive_name}"
+
     run_dryrun_unchanged "create-snapshot-overwrite" create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_LV" "$SNAP_OVERWRITE_OLD_LV" restart
     project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_LV" "$SNAP_OVERWRITE_OLD_LV"
 
     tsow_new_volid="$(qm config "$SNAP_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
-    [ "$tsow_new_volid" != "$tsow_old_volid" ]
+    [ "$tsow_new_volid" = "$tsow_final_volid" ]
     tsow_new_path="$(pvesm path "$tsow_new_volid")"
     tsow_origin="$(lvs --noheadings -o origin "$tsow_new_path" | trim)"
     [ "$tsow_origin" = "$COPY_SRC_LV_NAME" ]
-    qm config "$SNAP_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tsow_old_volid}([,[:space:]]|$)" >/dev/null
+
+    [ "$(lvs --noheadings -o lv_uuid "$tsow_archive_path" | trim)" = "$tsow_old_uuid" ]
+    qm config "$SNAP_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tsow_archive_volid}([,[:space:]]|$)" >/dev/null
+}
+
+test_create_copy_overwrite_delete() {
+    tcod_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_DELETE_OLD_LV" | trim)"
+    tcod_final_volid="$TEST_STORAGE_B:$COPY_OVERWRITE_DELETE_OLD_NAME"
+    tcod_archive_name="vm-${COPY_OVERWRITE_DELETE_VM}-disk-901"
+    tcod_archive_path="/dev/${TEST_VG_B}/${tcod_archive_name}"
+
+    run_dryrun_unchanged "create-copy-overwrite-delete" create-disk-copy-and-overwrite-disk-on-vm.sh delete "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_DELETE_VM" disk-0 stop
+    project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_DELETE_VM" disk-0 delete
+
+    tcod_new_volid="$(qm config "$COPY_OVERWRITE_DELETE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    [ "$tcod_new_volid" = "$tcod_final_volid" ]
+    cmp -n 33554432 "$COPY_SRC_LV" "$(pvesm path "$tcod_new_volid")"
+    lvs "$tcod_archive_path" >/dev/null 2>&1 && return 1
+    lvs --noheadings -o lv_uuid 2>/dev/null | grep -F "$tcod_old_uuid" >/dev/null && return 1
+    ! qm config "$COPY_OVERWRITE_DELETE_VM" | grep -F "$tcod_archive_name" >/dev/null
+}
+
+test_create_snapshot_overwrite_delete() {
+    tsod_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_DELETE_OLD_LV" | trim)"
+    tsod_final_name="$SNAP_OVERWRITE_DELETE_OLD_NAME"
+    tsod_final_volid="$TEST_STORAGE_A:$tsod_final_name"
+    tsod_archive_name="vm-${SNAP_OVERWRITE_DELETE_VM}-disk-901"
+    tsod_archive_path="/dev/${TEST_VG_B}/${tsod_archive_name}"
+
+    run_dryrun_unchanged "create-snapshot-overwrite-delete" create-disk-snapshot-and-overwrite-disk-on-vm.sh delete "$COPY_SRC_LV" "$SNAP_OVERWRITE_DELETE_OLD_LV" pause
+    project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_LV" "$SNAP_OVERWRITE_DELETE_OLD_LV" delete
+
+    tsod_new_volid="$(qm config "$SNAP_OVERWRITE_DELETE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    [ "$tsod_new_volid" = "$tsod_final_volid" ]
+    tsod_new_path="$(pvesm path "$tsod_new_volid")"
+    [ "$(lvs --noheadings -o origin "$tsod_new_path" | trim)" = "$COPY_SRC_LV_NAME" ]
+    lvs "$tsod_archive_path" >/dev/null 2>&1 && return 1
+    lvs --noheadings -o lv_uuid 2>/dev/null | grep -F "$tsod_old_uuid" >/dev/null && return 1
+    ! qm config "$SNAP_OVERWRITE_DELETE_VM" | grep -F "$tsod_archive_name" >/dev/null
 }
 
 test_copy_between_vms() {

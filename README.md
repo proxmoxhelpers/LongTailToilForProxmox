@@ -292,7 +292,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-copy-and-overwrite-disk-on-vm.sh`
 
-Create and byte-verify an independent copy of the source, replace an existing destination VM disk with it, and preserve the displaced destination volume as `unusedN`; source and destination may each be given by full LV path or `VMID + disk-N`.
+Create and byte-verify an independent copy of the source, replace an existing destination disk while retaining its original `vm-VMID-disk-N` number, and rename the displaced disk to the first free `disk-901+` as `unusedN` (or permanently remove it with `delete`).
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-overwrite-disk-on-vm.sh" -O "create-disk-copy-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-copy-and-overwrite-disk-on-vm.sh"
@@ -304,7 +304,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-snapshot-and-overwrite-disk-on-vm.sh`
 
-Create an LVM-thin snapshot of the source, replace an existing destination VM disk with that linked snapshot, and preserve the displaced destination volume as `unusedN`; source and destination may each be given by full LV path or `VMID + disk-N`.
+Create an LVM-thin snapshot of the source, replace an existing destination disk while retaining its original `vm-VMID-disk-N` number, and rename the displaced disk to the first free `disk-901+` as `unusedN` (or permanently remove it with `delete`).
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-overwrite-disk-on-vm.sh" -O "create-disk-snapshot-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-snapshot-and-overwrite-disk-on-vm.sh"
@@ -550,7 +550,7 @@ The v3.0.1 POSIX implementation was exercised by the repository's disposable int
 
 The validated run covered all 36 command cases, including real `qm`, `pvesm`, LVM/device-mapper, mount/umount, `qemu-img`, storage move/import/export, snapshot, rename, delete, recovery and VMID-change operations. Dry-run before/after snapshots remained unchanged, and protected guest/LVM/storage state returned to baseline with no detected anomalies.
 
-Version 3.2.0 adds the two overwrite helpers and expands the source/destination/state syntax of the existing create-and-add helpers. The integration matrix now covers all 40 commands. Run the suite on your Proxmox host before treating this feature release as validated for your environment.
+Version 3.2.1 corrects overwrite semantics: the replacement now inherits the destination's original backing `disk-N`, while the displaced disk is moved to the first free `disk-901+`; adding `delete` permanently removes that archived old disk only after the replacement succeeds. The integration matrix covers all 40 commands.
 
 Run the same suite on your own host:
 
@@ -593,6 +593,8 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
+- [v3.2.1 overwrite disk-number fix](docs/V3.2.1-OVERWRITE-DISK-NUMBER-FIX.md)
+- [v3.2.1 static validation](docs/V3.2.1-STATIC-VALIDATION.md)
 - [v3.2.0 disk create/overwrite helpers](docs/V3.2.0-DISK-CREATE-OVERWRITE.md)
 - [v3.2.0 pre-integration validation](docs/V3.2.0-STATIC-VALIDATION.md)
 - [v3.1.0 new helpers](docs/V3.1.0-NEW-HELPERS.md)

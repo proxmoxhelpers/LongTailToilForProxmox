@@ -627,7 +627,7 @@ verify_storage_mapping() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.0"; SCRIPT_VERSION="3.2.0"
+    PROJECT_VERSION="3.2.1"; SCRIPT_VERSION="3.2.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""

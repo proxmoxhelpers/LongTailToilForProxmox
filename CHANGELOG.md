@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.2.1 — 2026-08-17
+
+Corrected overwrite semantics for both disk-overwrite helpers.
+
+- Replacement copies/snapshots now finish with the destination's original `vm-VMID-disk-N` backing number.
+- The displaced destination LV is renamed first to the first free `vm-VMID-disk-901+` and preserved as `unusedN`.
+- Added the `delete` keyword, accepted anywhere, to permanently remove the displaced archived LV only after the replacement is attached, verified, and requested VM-state restoration succeeds.
+- Kept the replacement staging LV temporary: it is renamed into the original disk number immediately before reattachment.
+- Added integration coverage for preserve and delete paths for both overwrite helpers.
+
 ## 3.2.0 — 2026-08-17
 
 Disk create/overwrite expansion.

@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.0"
-    TEST_SUITE_VERSION="2.2.0"
+    PROJECT_VERSION="3.2.1"
+    TEST_SUITE_VERSION="2.2.1"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -143,7 +143,7 @@ test_all_standalone() {
 
         (cd "$tas_dir" && /bin/sh "./$tas_name" --help >/dev/null)
         tas_version="$(cd "$tas_dir" && /bin/sh "./$tas_name" --version)"
-        printf '%s\n' "$tas_version" | grep -F "(project 3.2.0)" >/dev/null || return 1
+        printf '%s\n' "$tas_version" | grep -F "(project 3.2.1)" >/dev/null || return 1
     done
 }
 
@@ -205,7 +205,7 @@ test_no_short_circuit_die() {
 test_all_versions() {
     for tav_script in "$PROJECT_ROOT"/*.sh; do
         tav_output="$(sh "$tav_script" --version)"
-        printf '%s\n' "$tav_output" | grep -F "(project 3.2.0)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
+        printf '%s\n' "$tav_output" | grep -F "(project 3.2.1)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
     done
 }
 

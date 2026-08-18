@@ -388,7 +388,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.0"; SCRIPT_VERSION="1.0.0"
+    PROJECT_VERSION="3.2.1"; SCRIPT_VERSION="1.0.0"
     ALL_LVS_FILE=""; REFS_FILE=""; SORTED_REFS_FILE=""
     parse_arguments "$@"
 }

@@ -631,6 +631,9 @@ resolve_destination() {
     DEST_OLD_LV="$(lvs --noheadings -o lv_name "$DEST_OLD_PATH" 2>/dev/null | trim)"
     DEST_OLD_POOL="$(lvs --noheadings -o pool_lv "$DEST_OLD_PATH" 2>/dev/null | trim)"
     [ -n "$DEST_VG" ] && [ -n "$DEST_OLD_LV" ] || die "Destination disk is not LVM-backed."
+    DEST_OLD_STORAGE_ID="${DEST_OLD_VOLID%%:*}"
+    DEST_DISK_NUMBER="$(printf '%s\n' "$DEST_OLD_LV" | sed -n "s/^vm-${DEST_VM}-disk-\\([0-9][0-9]*\\)$/\\1/p")"
+    [ -n "$DEST_DISK_NUMBER" ] || die "Destination LV must use the standard vm-${DEST_VM}-disk-N naming scheme."
 }
 
 # apply_destination_state
@@ -674,7 +677,8 @@ restore_destination_state() {
 # old_unused_key
 # Prints the unusedN key currently preserving the displaced destination volume.
 old_unused_key() {
-    qm config "$DEST_VM" 2>/dev/null | awk -F': ' -v vol="$DEST_OLD_VOLID" '
+    ouk_volid="${1:-$DEST_OLD_VOLID}"
+    qm config "$DEST_VM" 2>/dev/null | awk -F': ' -v vol="$ouk_volid" '
         $1 ~ /^unused[0-9]+$/ {split($2,a,","); if(a[1]==vol) print $1}
     ' | head -n1
 }
@@ -684,11 +688,29 @@ old_unused_key() {
 rollback_old_disk() {
     [ "$OLD_DETACHED" -eq 1 ] || return 0
     [ "$NEW_ATTACHED" -eq 0 ] || return 1
+
     warn "Attempting to restore original destination disk $DEST_OLD_VOLID at $DEST_SLOT."
-    if ! dryrun_cmd qm set "$DEST_VM" "--${DEST_SLOT}" "$DEST_OLD_VALUE"; then warn "Could not restore original destination disk automatically."; return 1; fi
-    if ! dryrun_enabled; then
-        rod_unused="$(old_unused_key)"
-        [ -z "$rod_unused" ] || qm set "$DEST_VM" --delete "$rod_unused" >/dev/null 2>&1 || :
+
+    if [ "$REPLACEMENT_FINALIZED" -eq 1 ] && [ "$NEW_VG" = "$DEST_VG" ]; then
+        if ! dryrun_cmd lvrename "$NEW_VG" "$FINAL_LV_NAME" "$TEMP_LV_NAME"; then
+            warn "Could not move the replacement LV out of the original disk number for rollback."
+            return 1
+        fi
+        NEW_LV_NAME="$TEMP_LV_NAME"; NEW_LV_PATH="$TEMP_LV_PATH"; NEW_VOLID="$TEMP_VOLID"; REPLACEMENT_FINALIZED=0
+    fi
+
+    if [ "$OLD_ARCHIVED" -eq 1 ]; then
+        if [ -n "$OLD_UNUSED_KEY" ]; then dryrun_cmd qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY" >/dev/null 2>&1 || :; fi
+        if ! dryrun_cmd lvrename "$DEST_VG" "$ARCHIVE_LV_NAME" "$DEST_OLD_LV"; then
+            warn "Could not rename archived destination LV back to $DEST_OLD_LV."
+            return 1
+        fi
+        OLD_ARCHIVED=0
+    fi
+
+    if ! dryrun_cmd qm set "$DEST_VM" "--${DEST_SLOT}" "$DEST_OLD_VALUE"; then
+        warn "Could not restore original destination disk automatically."
+        return 1
     fi
     OLD_DETACHED=0
     return 0
@@ -746,20 +768,20 @@ verify_storage_mapping() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.0"; SCRIPT_VERSION="3.2.0"
+    PROJECT_VERSION="3.2.1"; SCRIPT_VERSION="3.2.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
     SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
     DEST_FORM=""; DEST_INPUT=""; DEST_VM_INPUT=""; DEST_SELECTOR=""
-    CREATED=0; OLD_DETACHED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0
+    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""
     parse_arguments "$@"
     check_elevation
 }
 
 main() {
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs lvcreate lvremove qm pvesm blockdev readlink awk grep sed sort tail find
+    need_commands lvs lvcreate lvrename lvremove qm pvesm blockdev readlink awk grep sed sort tail find
     ro_saved_mode="$MODE"; MODE="hot"; resolve_source; MODE="$ro_saved_mode"
     [ -n "$SOURCE_POOL" ] || { printf 'Source: %s\nLV attributes: %s\n' "$SOURCE_PATH" "$SOURCE_ATTR"; die "Source is not an LVM-thin volume."; }
     resolve_destination
@@ -773,6 +795,7 @@ main() {
     apply_destination_state
     replace_destination_disk
     restore_destination_state
+    delete_archived_disk
     verify_result
     COMPLETE=1
     trap - 0 HUP INT TERM
@@ -783,8 +806,10 @@ end() {
     printf 'Source:          %s\n' "$SOURCE_PATH"
     printf 'Destination VM:  %s\n' "$DEST_VM"
     printf 'Replaced slot:   %s\n' "$DEST_SLOT"
-    printf 'Old volume:      %s (preserved as unusedN)\n' "$DEST_OLD_VOLID"
-    printf 'Snapshot:        %s\n' "$NEW_VOLID"
+    printf 'Disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
+    printf 'Snapshot:      %s\n' "$FINAL_VOLID"
+    if [ "$DELETE_OLD" -eq 1 ]; then printf 'Old volume:      %s (deleted after successful replacement)\n' "$DEST_OLD_VOLID"
+    else printf 'Old volume:      %s -> %s (preserved as unusedN)\n' "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; fi
     printf 'State mode:      %s\n\n' "$MODE"
     dryrun_summary
 }
@@ -798,17 +823,23 @@ usage() {
 $(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
 
 USAGE
-  $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [dryrun]
-  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|slot> [hot|pause|stop|restart] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|slot> <destination-lv-path> [hot|pause|stop|restart] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|slot> <dest-vmid> <dest-disk-N|slot> [hot|pause|stop|restart] [dryrun]
+  $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|slot> [hot|pause|stop|restart] [delete] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|slot> <dest-vmid> <dest-disk-N|slot> [hot|pause|stop|restart] [delete] [dryrun]
 
 DESCRIPTION
-  Creates an LVM-thin snapshot of the source and replaces the destination VM
-  disk slot with that linked snapshot.
+  Creates an LVM-thin snapshot of the source, then replaces the
+  destination VM disk while retaining the destination's original backing disk
+  number (vm-DESTVMID-disk-N).
 
-  The displaced destination volume is NOT deleted. Proxmox preserves it as
-  unusedN so the previous disk remains recoverable.
+  The old destination LV is first renamed to vm-DESTVMID-disk-901, or the next
+  free number above 900, so the original disk-N becomes available. By default
+  that renamed disk remains recoverable as unusedN.
+
+  Add the keyword "delete" anywhere on the command line to permanently delete
+  the renamed old disk after the replacement is attached, verified, and the
+  requested VM-state restoration succeeds.
 
 DESTINATION VM STATE
   default   Hot-swap: replace the disk without pausing/stopping the VM.
@@ -822,7 +853,7 @@ DESTINATION VM STATE
 EXAMPLES
   $(basename "$0") /dev/pve/vm-123-disk-0 456 disk-1 dryrun
   $(basename "$0") 123 disk-0 456 disk-1 pause dryrun
-  $(basename "$0") /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 restart dryrun
+  $(basename "$0") delete /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 restart dryrun
 
 EOF
     dryrun_help
@@ -833,6 +864,7 @@ parse_arguments() {
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
             hot|pause|stop|restart) set_state_mode "$1" ;;
+            delete) DELETE_OLD=1 ;;
             -h|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
@@ -866,21 +898,50 @@ parse_arguments() {
 # VALIDATION / PRE-FLIGHT
 ############################################################
 
+# select_archive_name
+# Reserves vm-DESTVMID-disk-901 or the next free number for the displaced disk.
+select_archive_name() {
+    san_number=901
+    while :; do
+        ARCHIVE_LV_NAME="vm-${DEST_VM}-disk-${san_number}"
+        ARCHIVE_LV_PATH="/dev/${DEST_VG}/${ARCHIVE_LV_NAME}"
+        ARCHIVE_VOLID="${DEST_OLD_STORAGE_ID}:${ARCHIVE_LV_NAME}"
+        san_busy=0
+        lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1 && san_busy=1 || :
+        guest_volume_references | grep -F "|${ARCHIVE_VOLID}" >/dev/null 2>&1 && san_busy=1 || :
+        [ "$san_busy" -eq 0 ] && break
+        san_number=$((san_number + 1))
+    done
+    ARCHIVE_DISK_NUMBER="$san_number"
+}
+
 # select_new_disk_name
 # Chooses a collision-free vm-DESTVMID-disk-N snapshot name in SOURCE_VG.
 select_new_disk_name() {
+    NEW_VG="$SOURCE_VG"
+    FINAL_LV_NAME="$DEST_OLD_LV"
+    FINAL_LV_PATH="/dev/${NEW_VG}/${FINAL_LV_NAME}"
+    FINAL_VOLID="${STORAGE_ID}:${FINAL_LV_NAME}"
+
+    snd_existing_uuid="$(lvs --noheadings -o lv_uuid "${NEW_VG}/${FINAL_LV_NAME}" 2>/dev/null | trim || :)"
+    [ -z "$snd_existing_uuid" ] || [ "$snd_existing_uuid" = "$DEST_OLD_UUID" ] || die "Replacement name already exists on another LV: ${NEW_VG}/${FINAL_LV_NAME}"
+
     snd_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "vm-${DEST_VM}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
-    if [ -n "$snd_highest" ]; then NEW_DISK_NUMBER=$((snd_highest + 1)); else NEW_DISK_NUMBER=0; fi
+    if [ -n "$snd_highest" ]; then TEMP_DISK_NUMBER=$((snd_highest + 1)); else TEMP_DISK_NUMBER=0; fi
     while :; do
-        NEW_LV_NAME="vm-${DEST_VM}-disk-${NEW_DISK_NUMBER}"
-        NEW_LV_PATH="/dev/${SOURCE_VG}/${NEW_LV_NAME}"
-        NEW_VOLID="${STORAGE_ID}:${NEW_LV_NAME}"
+        TEMP_LV_NAME="vm-${DEST_VM}-disk-${TEMP_DISK_NUMBER}"
+        [ "$TEMP_LV_NAME" = "$FINAL_LV_NAME" ] && { TEMP_DISK_NUMBER=$((TEMP_DISK_NUMBER + 1)); continue; }
+        TEMP_LV_PATH="/dev/${NEW_VG}/${TEMP_LV_NAME}"
+        TEMP_VOLID="${STORAGE_ID}:${TEMP_LV_NAME}"
         snd_busy=0
-        printf '%s\n' "$DEST_CONFIG" | grep -qF "$NEW_LV_NAME" && snd_busy=1 || :
-        lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 && snd_busy=1 || :
+        printf '%s\n' "$DEST_CONFIG" | grep -qF "$TEMP_LV_NAME" && snd_busy=1 || :
+        lvs "${NEW_VG}/${TEMP_LV_NAME}" >/dev/null 2>&1 && snd_busy=1 || :
         [ "$snd_busy" -eq 0 ] && break
-        NEW_DISK_NUMBER=$((NEW_DISK_NUMBER + 1))
+        TEMP_DISK_NUMBER=$((TEMP_DISK_NUMBER + 1))
     done
+
+    NEW_LV_NAME="$TEMP_LV_NAME"; NEW_LV_PATH="$TEMP_LV_PATH"; NEW_VOLID="$TEMP_VOLID"
+    select_archive_name
 }
 
 ############################################################
@@ -897,9 +958,13 @@ print_plan() {
     printf 'Destination VM status:  %s\n' "${DEST_STATUS:-unknown}"
     printf 'Destination state mode: %s\n' "$MODE"
     printf 'Replace slot:           %s\n' "$DEST_SLOT"
+    printf 'Target disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
     printf 'Old volume:             %s\n' "$DEST_OLD_VOLID"
-    printf 'New snapshot:           %s\n\n' "$NEW_VOLID"
-    warn "The displaced destination volume will be preserved as unusedN."
+    printf 'Old disk archive:       %s\n' "$ARCHIVE_VOLID"
+    printf 'Staged snapshot:        %s\n' "$TEMP_VOLID"
+    printf 'Final snapshot:         %s\n\n' "$FINAL_VOLID"
+    if [ "$DELETE_OLD" -eq 1 ]; then warn "delete requested: the archived old disk will be permanently removed only after the replacement is attached and verified."
+    else warn "The displaced destination volume will be renamed to disk-$ARCHIVE_DISK_NUMBER and preserved as unusedN."; fi
 }
 
 # replace_destination_disk
@@ -912,11 +977,37 @@ replace_destination_disk() {
     dryrun_cmd qm set "$DEST_VM" --delete "$DEST_SLOT"
     OLD_DETACHED=1
 
-    if dryrun_enabled; then dryrun_verify "$DEST_OLD_VOLID would be preserved as unusedN"
+    if dryrun_enabled; then OLD_UNUSED_KEY="$(first_free_unused "$DEST_VM")"
     else
-        rdd_unused="$(old_unused_key)"
-        [ -n "$rdd_unused" ] || { rollback_old_disk || :; die "Proxmox did not preserve the displaced disk as unusedN."; }
+        OLD_UNUSED_KEY="$(old_unused_key "$DEST_OLD_VOLID")"
+        [ -n "$OLD_UNUSED_KEY" ] || { rollback_old_disk || :; die "Proxmox did not preserve the displaced disk as unusedN."; }
     fi
+
+    info "Renaming displaced disk to $ARCHIVE_LV_NAME..."
+    if dryrun_enabled; then dryrun_cmd lvrename "$DEST_VG" "$DEST_OLD_LV" "$ARCHIVE_LV_NAME"
+    else run_lvm_filtered lvrename "$DEST_VG" "$DEST_OLD_LV" "$ARCHIVE_LV_NAME"; fi
+    OLD_ARCHIVED=1
+
+    info "Updating $OLD_UNUSED_KEY to the archived volume name..."
+    if ! dryrun_cmd qm set "$DEST_VM" "--${OLD_UNUSED_KEY}" "$ARCHIVE_VOLID"; then
+        rollback_old_disk || :
+        die "Could not update $OLD_UNUSED_KEY to $ARCHIVE_VOLID."
+    fi
+
+    if ! dryrun_enabled; then
+        [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || { rollback_old_disk || :; die "Archived disk is not preserved as unusedN."; }
+        lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1 || { rollback_old_disk || :; die "Archived LV cannot be found."; }
+    else
+        dryrun_verify "$DEST_OLD_VOLID would be preserved as $ARCHIVE_VOLID at $OLD_UNUSED_KEY"
+    fi
+
+    info "Renaming staged snapshot to the original disk number disk-$DEST_DISK_NUMBER..."
+    if dryrun_enabled; then dryrun_cmd lvrename "$NEW_VG" "$TEMP_LV_NAME" "$FINAL_LV_NAME"
+    else run_lvm_filtered lvrename "$NEW_VG" "$TEMP_LV_NAME" "$FINAL_LV_NAME"; fi
+    REPLACEMENT_FINALIZED=1
+    NEW_LV_NAME="$FINAL_LV_NAME"; NEW_LV_PATH="$FINAL_LV_PATH"; NEW_VOLID="$FINAL_VOLID"
+
+    verify_storage_mapping
 
     info "Attaching snapshot $NEW_VOLID at $DEST_SLOT..."
     if ! dryrun_cmd qm set "$DEST_VM" "--${DEST_SLOT}" "${NEW_VOLID}${DEST_OPTIONS}"; then
@@ -927,17 +1018,51 @@ replace_destination_disk() {
     NEW_ATTACHED=1
 }
 
+delete_archived_disk() {
+    [ "$DELETE_OLD" -eq 1 ] || return 0
+    info "Deleting displaced archived disk $ARCHIVE_VOLID..."
+
+    if dryrun_enabled; then
+        dryrun_cmd qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY"
+        dryrun_cmd lvremove -y "$ARCHIVE_LV_PATH"
+        dryrun_verify "$ARCHIVE_VOLID would be permanently deleted after the replacement is verified"
+        OLD_ARCHIVED=0
+        OLD_DELETED=1
+        return 0
+    fi
+
+    [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Refusing delete: archived disk is no longer the expected unused volume."
+    qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY"
+    if ! run_lvm_filtered lvremove -y "$ARCHIVE_LV_PATH"; then
+        warn "Could not delete archived LV; restoring $OLD_UNUSED_KEY."
+        qm set "$DEST_VM" "--${OLD_UNUSED_KEY}" "$ARCHIVE_VOLID" >/dev/null 2>&1 || warn "Could not restore unused reference automatically."
+        die "Failed to delete $ARCHIVE_VOLID."
+    fi
+    if lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1; then die "lvremove returned successfully, but archived LV still exists."; fi
+    OLD_ARCHIVED=0
+    OLD_DELETED=1
+}
+
 verify_result() {
     if dryrun_enabled; then
-        dryrun_verify "$DEST_SLOT would reference $NEW_VOLID"
-        dryrun_verify "$DEST_OLD_VOLID would remain preserved as unusedN"
+        dryrun_verify "$DEST_SLOT would reference $FINAL_VOLID using the original disk number disk-$DEST_DISK_NUMBER"
+        if [ "$DELETE_OLD" -eq 1 ]; then dryrun_verify "$ARCHIVE_VOLID would be deleted"
+        else dryrun_verify "$ARCHIVE_VOLID would remain preserved as unusedN"; fi
         dryrun_verify "Snapshot origin would remain $SOURCE_LV"
         dryrun_verify "Destination VM state would match requested $MODE behavior"
         return 0
     fi
-    [ "$(disk_volid "$DEST_VM" "$DEST_SLOT")" = "$NEW_VOLID" ] || die "Replacement slot verification failed."
-    [ -n "$(old_unused_key)" ] || die "Displaced destination volume is not preserved as unusedN."
-    vr_origin="$(lvs --noheadings -o origin "${SOURCE_VG}/${NEW_LV_NAME}" | trim)"
+
+    [ "$(disk_volid "$DEST_VM" "$DEST_SLOT")" = "$FINAL_VOLID" ] || die "Replacement slot verification failed."
+    [ "$NEW_LV_NAME" = "vm-${DEST_VM}-disk-${DEST_DISK_NUMBER}" ] || die "Replacement did not retain the original destination disk number."
+    if [ "$DELETE_OLD" -eq 1 ]; then
+        [ "$OLD_DELETED" -eq 1 ] || die "Delete was requested, but the displaced disk was not deleted."
+        [ -z "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Deleted archived disk still has an unused reference."
+    else
+        [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Archived destination volume is not preserved as unusedN."
+        lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1 || die "Archived destination LV is missing."
+    fi
+    vr_origin="$(lvs --noheadings -o origin "${NEW_VG}/${NEW_LV_NAME}" | trim)"
     [ "$vr_origin" = "$SOURCE_LV" ] || die "Snapshot origin verification failed."
 }
 
@@ -970,7 +1095,7 @@ cleanup_on_exit() {
     if ! dryrun_enabled && [ "$CREATED" -eq 1 ] && [ "$NEW_ATTACHED" -eq 0 ] && [ "$COMPLETE" -eq 0 ]; then
         if ! guest_volume_references | grep -F "|$NEW_VOLID" >/dev/null 2>&1; then
             warn "Removing unattached replacement snapshot: $NEW_LV_PATH"
-            lvremove -y "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || warn "Could not remove $NEW_LV_PATH automatically."
+            lvremove -y "${NEW_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || warn "Could not remove $NEW_LV_PATH automatically."
         fi
     fi
 
