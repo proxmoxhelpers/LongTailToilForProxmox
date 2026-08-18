@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.5.1 — 2026-08-17
+
+Bugfix release based on the v3.4.7 real-Proxmox acceptance results supplied on 2026-08-17.
+
+- Fix inactive Proxmox template/base independent copies. `base-*` LVs may carry LVM activation-skip; plain `lvchange -ay` can return success while intentionally leaving the block device absent. The three canonical copy engines now use `lvchange -ay -K` for temporary source activation, retain exact block-device verification, and restore sources to inactive afterward.
+- Update the real byte-comparison fixture for inactive base/template LVs to use the same `-K` activation semantics.
+- Strengthen the static inactive-source contract so future regressions must retain activation-skip handling.
+- Fix the network integration fixture: it now calls `create_storage_sandbox` before creating the LXC rootfs and refuses to proceed unless `TEST_STORAGE_A` is provably registered to the current test run.
+- Add a static contract enforcing network rootfs-storage provisioning/ownership order.
+- The supplied v3.4.7 run is recorded as 86/88 integration cases passing, with two inactive-base copy failures and one network cleanup anomaly. All other functional cases passed; the two copy failures occurred before destination mutation.
+- Test-suite metadata is now 2.9.1. The integration definition remains 88 real cases.
+- v3.5.1 remains a release candidate until the focused copy/network groups and then the full suite pass on real Proxmox with zero failures and zero anomalies.
+
+## 3.5.0 — 2026-08-17
+
+Project-wide POSIX shell structure/style refactor; intended runtime semantics remain those of v3.4.7.
+
+- All 42 public helpers now define `setup()`, `main()`, `end()`, then `usage()` as their first four functions.
+- User/default/script state initialization is at the top of `setup()` before setup helper calls.
+- Routine root-success output such as `[OK] Elevation: running as root.` was removed. Elevation is reported only when the operation actually needs elevation and the current process lacks it.
+- `usage()` is immediately after `end()` in every public helper.
+- Argument-taking functions now include explicit call syntax in their comment blocks.
+- Function scratch variables use one function-derived prefix consistently; inconsistent legacy prefixes were normalized.
+- The style guide now defines `_functionprefix_...` for deliberate function-persistent private state and conceptual pseudoarray/pseudoobject notation while preserving POSIX-safe executable representations.
+- Standalone embedded companion payloads were regenerated from the refactored canonical helpers.
+- Static coverage now enforces lifecycle order, silent elevation, argument-call documentation, help/usage snapshots, standalone structure and the existing safety contracts.
+- Test-suite metadata is now 2.9.0; the real Proxmox integration definition remains 88 cases and requires a fresh real-host run because every public helper was structurally rewritten.
+
 ## 3.4.7 — 2026-08-17
 
 Third real-Proxmox integration-run corrections.

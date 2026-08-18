@@ -2,7 +2,10 @@
 
 **Proxmox LongTail Toil** is a collection of 42 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
 
-Project **v3.4.7** includes a complete usage/documentation layer without changing the v3.4.4 storage transaction behavior: every helper has callable `--help`, a full documentation page, and a verbatim `.usage` snapshot linked directly from this README. The POSIX style and testing guides now also capture the Proxmox/system-shell pitfalls learned during real integration runs.
+Project **v3.5.1** includes a complete usage/documentation layer without changing the v3.4.4 storage transaction behavior: every helper has callable `--help`, a full documentation page, and a verbatim `.usage` snapshot linked directly from this README. The POSIX style and testing guides now also capture the Proxmox/system-shell pitfalls learned during real integration runs.
+
+v3.5.1 fixes the real-host failures found in the v3.4.7 acceptance run: independent-copy helpers now use `lvchange -ay -K` when temporarily activating an inactive source LV, allowing Proxmox `base-*` template LVs marked activation-skip to expose a block device without changing LV permission metadata. The network integration group now provisions and proves ownership of its disposable LXC rootfs storage before fixture creation.
+
 
 ## The 42 helpers
 
@@ -589,7 +592,7 @@ Protected-host comparisons include pre-existing VG/PV/LV metadata, canonical sto
 
 The last fully documented real-Proxmox integration-validated POSIX baseline is **v3.0.1**, whose then-current 36-command suite completed cleanly with dry-run state unchanged and protected guest/LVM/storage state returned to baseline.
 
-The current **v3.4.7** release candidate contains 42 standalone helpers and an expanded **88-case** real integration definition plus static/CLI contracts. The suite covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
+The current **v3.5.1** release candidate contains 42 standalone helpers and an expanded **88-case** real integration definition plus static/CLI contracts. The suite covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
 
 The third current-generation real-host run, against the v3.4.4/v3.4.5 behavior on 2026-08-17, was substantially cleaner: **82 of 83 registered cases that actually started passed**, with **one helper failure** and **three network cases blocked during fixture setup**. Eight of ten groups were clean. The failed helper was the independent-copy path for an inactive `base-*` template LV: LVM metadata and size resolution succeeded, but the LV had no active block-device node for `dd`.
 
@@ -603,7 +606,7 @@ Run the full current suite on a disposable or non-production Proxmox node:
 ./tests/run-all-tests.sh --run --verbose
 ```
 
-A v3.4.7 build should be described as **release-candidate / statically validated** until the current real-host behavior finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
+A v3.5.1 build should be described as **release-candidate / statically validated** until the current real-host behavior finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
 
 ## Why this exists
 
@@ -665,6 +668,11 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [v3.4.6 static validation](docs/V3.4.6-STATIC-VALIDATION.md)
 - [v3.4.7 third real-run triage and corrections](docs/V3.4.7-THIRD-REAL-RUN-TRIAGE.md)
 - [v3.4.7 static validation](docs/V3.4.7-STATIC-VALIDATION.md)
+- [v3.4.7 real-Proxmox test results](docs/V3.4.7-REAL-RUN-RESULTS.md)
+- [v3.5.0 project-wide shell style refactor](docs/V3.5.0-STYLE-REFACTOR.md)
+- [v3.5.0 static validation](docs/V3.5.0-STATIC-VALIDATION.md)
+- [v3.5.1 triage of the v3.4.7 real-host run](docs/V3.5.1-REAL-RUN-TRIAGE.md)
+- [v3.5.1 static validation](docs/V3.5.1-STATIC-VALIDATION.md)
 - [Current command-by-command test matrix](tests/TEST-MATRIX.md)
 - [v3.2.3 empty-target behavior](docs/V3.2.3-EMPTY-TARGET.md)
 - [v3.2.3 static validation](docs/V3.2.3-STATIC-VALIDATION.md)

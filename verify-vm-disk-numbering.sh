@@ -2,6 +2,74 @@
 set -eu
 
 ############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    ALL_LVS_FILE=""; REFS_FILE=""
+    define_colours
+    parse_arguments "$@"
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    need_commands lvs pvesm find awk sed grep sort mktemp cp
+    build_lvm_catalog
+    collect_guest_lvm_references
+    print_verification
+    print_remaining_lvs
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() { cleanup_files; }
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") [dryrun]
+
+DESCRIPTION
+  Lists every LVM volume referenced by Proxmox QEMU/LXC guests and verifies
+  managed Proxmox disk numbering.
+
+  Red rows identify managed LVs whose embedded VMID does not match the guest
+  that references them, for example VM 199 -> base-100-disk-1.
+
+  Yellow guest headings identify ACTIVE managed LVM disk-number problems:
+  numbering that does not start at disk-0, gaps in the sequence, or duplicate
+  disk-N values. unusedN entries are listed but do not participate in the
+  active numbering sequence.
+
+  Both vm-VMID-disk-N and base-VMID-disk-N are recognized. All LVs not
+  referenced by a visible guest are listed at the end.
+
+COLOURS
+  green   numbering looks consistent
+  yellow  active managed disk numbering does not start at 0
+  red     an LV embeds a different VMID than the guest that references it
+  cyan    informational / unmanaged LVM reference
+
+EOF
+    dryrun_help
+}
+
+############################################################
 # EMBEDDED SHARED RUNTIME
 #
 # This command is intentionally self-contained. The common and
@@ -25,11 +93,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -41,15 +115,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -58,10 +134,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -70,6 +148,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -122,6 +201,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -134,6 +214,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -165,6 +246,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -182,6 +264,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -196,6 +279,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -228,14 +312,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -321,6 +408,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -336,6 +424,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -350,6 +439,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -358,10 +448,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -369,6 +461,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -384,62 +477,10 @@ dryrun_summary() {
 
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="1.1.0"
-    ALL_LVS_FILE=""; REFS_FILE=""
-    parse_arguments "$@"
-}
-
-main() {
-    need_commands lvs pvesm find awk sed grep sort mktemp cp
-    build_lvm_catalog
-    collect_guest_lvm_references
-    print_verification
-    print_remaining_lvs
-}
-
-end() { cleanup_files; }
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() {
-    cat <<EOF
-$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
-
-USAGE
-  $(basename "$0") [dryrun]
-
-DESCRIPTION
-  Lists every LVM volume referenced by Proxmox QEMU/LXC guests and verifies
-  managed Proxmox disk numbering.
-
-  Red rows identify managed LVs whose embedded VMID does not match the guest
-  that references them, for example VM 199 -> base-100-disk-1.
-
-  Yellow guest headings identify ACTIVE managed LVM disk-number problems:
-  numbering that does not start at disk-0, gaps in the sequence, or duplicate
-  disk-N values. unusedN entries are listed but do not participate in the
-  active numbering sequence.
-
-  Both vm-VMID-disk-N and base-VMID-disk-N are recognized. All LVs not
-  referenced by a visible guest are listed at the end.
-
-COLOURS
-  green   numbering looks consistent
-  yellow  active managed disk numbering does not start at 0
-  red     an LV embeds a different VMID than the guest that references it
-  cyan    informational / unmanaged LVM reference
-
-EOF
-    dryrun_help
-}
-
+# Call: parse_arguments ARG1
 parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -473,6 +514,7 @@ managed_name_fields() (
     printf '%s|%s|%s\n' "$mnf_family" "$mnf_vmid" "$mnf_disk"
 )
 
+# Call: build_lvm_catalog ARG1 [ARG2] [ARG3] [ARG4] [ARG5] [ARG6] [ARG7]
 build_lvm_catalog() {
     install_temp_cleanup
     ALL_LVS_FILE="$(mktemp)" || die "Unable to create LVM catalog."; register_temp_file "$ALL_LVS_FILE"
@@ -488,40 +530,41 @@ build_lvm_catalog() {
 # collect_guest_lvm_references
 # REFS_FILE columns:
 # vmid|type|name|slot|volid|uuid|path|lvname|family|embedded-vmid|disk-number
+# Call: collect_guest_lvm_references ARG1 [ARG2] [ARG3] [ARG4]
 collect_guest_lvm_references() {
     : > "$REFS_FILE"
-    all_guest_configs | while IFS= read -r cgr_cfg; do
-        [ -n "$cgr_cfg" ] || continue
-        cgr_id="${cgr_cfg##*/}"; cgr_id="${cgr_id%.conf}"
-        case "$cgr_id" in ''|*[!0-9]*) continue ;; esac
+    all_guest_configs | while IFS= read -r cglr_cfg; do
+        [ -n "$cglr_cfg" ] || continue
+        cglr_id="${cglr_cfg##*/}"; cglr_id="${cglr_id%.conf}"
+        case "$cglr_id" in ''|*[!0-9]*) continue ;; esac
 
-        case "$cgr_cfg" in
-            */lxc/*) cgr_type="LXC"; cgr_name="$(awk -F': ' '$1=="hostname" {print $2; exit}' "$cgr_cfg")" ;;
-            *) cgr_type="QEMU"; cgr_name="$(awk -F': ' '$1=="name" {print $2; exit}' "$cgr_cfg")" ;;
+        case "$cglr_cfg" in
+            */lxc/*) cglr_type="LXC"; cglr_name="$(awk -F': ' '$1=="hostname" {print $2; exit}' "$cglr_cfg")" ;;
+            *) cglr_type="QEMU"; cglr_name="$(awk -F': ' '$1=="name" {print $2; exit}' "$cglr_cfg")" ;;
         esac
-        [ -n "$cgr_name" ] || cgr_name="-"
+        [ -n "$cglr_name" ] || cglr_name="-"
 
-        config_volume_references "$cgr_cfg" | while IFS='|' read -r cgr_slot cgr_volid; do
-            [ -n "$cgr_volid" ] || continue
-            cgr_path="$(pvesm path "$cgr_volid" 2>/dev/null || :)"
-            [ -n "$cgr_path" ] || continue
-            lvs "$cgr_path" >/dev/null 2>&1 || continue
-            cgr_uuid="$(lvs --noheadings -o lv_uuid "$cgr_path" 2>/dev/null | trim)"
-            [ -n "$cgr_uuid" ] || continue
-            cgr_row="$(awk -F'|' -v u="$cgr_uuid" '$1==u {print $2 "|" $4; exit}' "$ALL_LVS_FILE")"
-            [ -n "$cgr_row" ] || continue
-            cgr_catalog_path="${cgr_row%%|*}"
-            cgr_lvname="${cgr_row#*|}"
-            cgr_family="-"; cgr_embedded="-"; cgr_disk="-"
-            if cgr_managed="$(managed_name_fields "$cgr_lvname" 2>/dev/null)"; then
-                cgr_family="${cgr_managed%%|*}"
-                cgr_rest="${cgr_managed#*|}"
-                cgr_embedded="${cgr_rest%%|*}"
-                cgr_disk="${cgr_rest#*|}"
+        config_volume_references "$cglr_cfg" | while IFS='|' read -r cglr_slot cglr_volid; do
+            [ -n "$cglr_volid" ] || continue
+            cglr_path="$(pvesm path "$cglr_volid" 2>/dev/null || :)"
+            [ -n "$cglr_path" ] || continue
+            lvs "$cglr_path" >/dev/null 2>&1 || continue
+            cglr_uuid="$(lvs --noheadings -o lv_uuid "$cglr_path" 2>/dev/null | trim)"
+            [ -n "$cglr_uuid" ] || continue
+            cglr_row="$(awk -F'|' -v u="$cglr_uuid" '$1==u {print $2 "|" $4; exit}' "$ALL_LVS_FILE")"
+            [ -n "$cglr_row" ] || continue
+            cglr_catalog_path="${cglr_row%%|*}"
+            cglr_lvname="${cglr_row#*|}"
+            cglr_family="-"; cglr_embedded="-"; cglr_disk="-"
+            if cglr_managed="$(managed_name_fields "$cglr_lvname" 2>/dev/null)"; then
+                cglr_family="${cglr_managed%%|*}"
+                cglr_rest="${cglr_managed#*|}"
+                cglr_embedded="${cglr_rest%%|*}"
+                cglr_disk="${cglr_rest#*|}"
             fi
             printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-                "$cgr_id" "$cgr_type" "$cgr_name" "$cgr_slot" "$cgr_volid" "$cgr_uuid" \
-                "$cgr_catalog_path" "$cgr_lvname" "$cgr_family" "$cgr_embedded" "$cgr_disk"
+                "$cglr_id" "$cglr_type" "$cglr_name" "$cglr_slot" "$cglr_volid" "$cglr_uuid" \
+                "$cglr_catalog_path" "$cglr_lvname" "$cglr_family" "$cglr_embedded" "$cglr_disk"
         done
     done | sort -t'|' -k1,1n -k4,4 -u > "$REFS_FILE"
     return 0
@@ -572,6 +615,7 @@ active_numbering_status() (
 
 # guest_numbering_state VMID
 # Prints mismatch-count|active-min-disk|active-managed-count.
+# Call: guest_numbering_state VMID
 guest_numbering_state() {
     gns_id="$1"
     awk -F'|' -v id="$gns_id" '
@@ -590,6 +634,7 @@ guest_numbering_state() {
     ' "$REFS_FILE"
 }
 
+# Call: print_verification ARG1 [ARG2] [ARG3]
 print_verification() {
     section "VM / CT LVM disk-number verification"
     if [ ! -s "$REFS_FILE" ]; then printf '%s\n' "(none)"; return 0; fi
@@ -618,28 +663,29 @@ print_verification() {
         printf '  %-10s %-40s %-7s %-9s %-8s %s\n' SLOT LVM_PATH FAMILY LV_VMID DISK STATUS
 
         awk -F'|' -v id="$pv_id" '$1==id' "$REFS_FILE" | while IFS='|' read -r \
-            pr_id pr_type pr_name pr_slot pr_volid pr_uuid pr_path pr_lvname pr_family pr_embedded pr_disk; do
+            pv_row_id pv_row_type pv_row_name pv_row_slot pv_row_volid pv_row_uuid pv_row_path pv_row_lvname pv_row_family pv_row_embedded pv_row_disk; do
 
-            pr_color="$C_CYAN"; pr_status="UNMANAGED"
-            if [ "$pr_embedded" != "-" ]; then
-                if [ "$pr_embedded" != "$pv_id" ]; then
-                    pr_color="$C_RED"; pr_status="VMID != $pv_id"
-                elif [ "$pr_slot" != "${pr_slot#unused}" ]; then
-                    pr_color="$C_CYAN"; pr_status="UNUSED"
+            pv_row_color="$C_CYAN"; pv_row_status="UNMANAGED"
+            if [ "$pv_row_embedded" != "-" ]; then
+                if [ "$pv_row_embedded" != "$pv_id" ]; then
+                    pv_row_color="$C_RED"; pv_row_status="VMID != $pv_id"
+                elif [ "$pv_row_slot" != "${pv_row_slot#unused}" ]; then
+                    pv_row_color="$C_CYAN"; pv_row_status="UNUSED"
                 elif [ "$pv_sequence" != "OK" ]; then
-                    pr_color="$C_YELLOW"; pr_status="NUMBERING"
+                    pv_row_color="$C_YELLOW"; pv_row_status="NUMBERING"
                 else
-                    pr_color="$C_GREEN"; pr_status="OK"
+                    pv_row_color="$C_GREEN"; pv_row_status="OK"
                 fi
             fi
             printf '  %-10s %s%-40s%s %-7s %-9s %-8s %s%s%s\n' \
-                "$pr_slot" "$pr_color" "$pr_path" "$C_RESET" "$pr_family" "$pr_embedded" "$pr_disk" \
-                "$pr_color" "$pr_status" "$C_RESET"
+                "$pv_row_slot" "$pv_row_color" "$pv_row_path" "$C_RESET" "$pv_row_family" "$pv_row_embedded" "$pv_row_disk" \
+                "$pv_row_color" "$pv_row_status" "$C_RESET"
         done
     done
     return 0
 }
 
+# Call: print_remaining_lvs ARG1 [ARG2] [ARG3] [ARG4] [ARG5] [ARG6]
 print_remaining_lvs() {
     section "Remaining LVM volumes"
     printf '%-40s %-12s %-16s %-16s %s\n' LVM_PATH SIZE POOL ORIGIN STATUS

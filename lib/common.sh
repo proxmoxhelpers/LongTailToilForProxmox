@@ -32,10 +32,11 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 

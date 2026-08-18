@@ -1,13 +1,25 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.8.5**  
-Project target: **3.4.7**
+Test suite version: **2.9.1**  
+Project target: **3.5.1**
 
 This suite exercises all 42 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.9.1 — v3.5.1 activation-skip and network-fixture corrections
+
+The v3.4.7 real-host run proved that a Proxmox `base-*` template LV can be inactive **and** marked activation-skip. Independent-copy tests now require `lvchange -ay -K` for temporary activation and verify the source returns inactive afterward.
+
+The network group now creates its own registered loopback LVM-thin sandbox before creating the LXC rootfs. A static contract enforces both provisioning order and the explicit ownership assertion.
+
+The real integration definition remains **88 cases**. v3.5.1 needs a fresh real-host run.
+
+## v2.9.0 — v3.5.0 structural/style enforcement
+
+The public helper scaffold is now enforced project-wide: `setup()`, `main()`, `end()`, and `usage()` must be the first four public helper functions; defaults/state initialize at the top of `setup()`; routine root-success elevation output is forbidden; and argument-taking functions must document their call syntax. Runtime behavior tests remain the v3.4.7 88-case definition.
 
 ## v2.8.5 — v3.4.7 inactive-source and network-fixture regression coverage
 

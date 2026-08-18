@@ -2,6 +2,43 @@
 set -eu
 
 ############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    DEST_VG=""
+    define_colours
+    parse_arguments "$@"
+    check_elevation
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    if [ -n "$DEST_VG" ]; then run_embedded_copy_disk_between_vms "$VMID" "$SLOT" "$VMID" "$DEST_VG"
+    else run_embedded_copy_disk_between_vms "$VMID" "$SLOT" "$VMID"; fi
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() { :; }
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() { printf 'Usage: %s <vmid> <disk-slot> [destination-vg] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+
+############################################################
 # EMBEDDED SHARED RUNTIME
 #
 # This command is intentionally self-contained. The common and
@@ -25,11 +62,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -41,15 +84,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -58,10 +103,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -70,6 +117,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -122,6 +170,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -134,6 +183,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -165,6 +215,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -182,6 +233,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -196,6 +248,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -228,14 +281,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -321,6 +377,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -336,6 +393,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -350,6 +408,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -358,10 +417,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -369,6 +430,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -384,31 +446,11 @@ dryrun_summary() {
 
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.3.1"
-    DEST_VG=""
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    if [ -n "$DEST_VG" ]; then run_embedded_copy_disk_between_vms "$VMID" "$SLOT" "$VMID" "$DEST_VG"
-    else run_embedded_copy_disk_between_vms "$VMID" "$SLOT" "$VMID"; fi
-}
-
-end() { :; }
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <vmid> <disk-slot> [destination-vg] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
 
+# Call: parse_arguments ARG1
 parse_arguments() {
     pa_count=0
     while [ "$#" -gt 0 ]; do
@@ -429,10 +471,50 @@ parse_arguments() {
 
 # run_embedded_copy_disk_between_vms
 # Executes the bundled copy-disk-between-vms.sh implementation without requiring a companion file.
+# Call: run_embedded_copy_disk_between_vms [ARG...]
 run_embedded_copy_disk_between_vms() {
     /bin/sh -s -- "$@" <<'__PROXMOX_LONGTAIL_EMBEDDED_COPY_DISK_BETWEEN_VMS__'
 #!/bin/sh
 set -eu
+
+############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    DEST_VG=""
+    define_colours
+    parse_arguments "$@"
+    check_elevation
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    need_commands qm pvesm lvs
+    resolve_source
+    if [ -n "$DEST_VG" ]; then run_embedded_create_disk_copy_and_add_to_vm "$PATH_SRC" "$DST_VM" "$DEST_VG"
+    else run_embedded_create_disk_copy_and_add_to_vm "$PATH_SRC" "$DST_VM"; fi
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() { :; }
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() { printf 'Usage: %s <source-vmid> <source-slot> <destination-vmid> [destination-vg] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
 
 ############################################################
 # EMBEDDED SHARED RUNTIME
@@ -458,11 +540,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -474,15 +562,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -491,10 +581,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -503,6 +595,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -555,6 +648,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -567,6 +661,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -598,6 +693,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -615,6 +711,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -629,6 +726,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -661,14 +759,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -754,6 +855,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -769,6 +871,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -783,6 +886,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -791,10 +895,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -802,6 +908,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -817,33 +924,11 @@ dryrun_summary() {
 
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.3.1"
-    DEST_VG=""
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands qm pvesm lvs
-    resolve_source
-    if [ -n "$DEST_VG" ]; then run_embedded_create_disk_copy_and_add_to_vm "$PATH_SRC" "$DST_VM" "$DEST_VG"
-    else run_embedded_create_disk_copy_and_add_to_vm "$PATH_SRC" "$DST_VM"; fi
-}
-
-end() { :; }
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <source-vmid> <source-slot> <destination-vmid> [destination-vg] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
 
+# Call: parse_arguments ARG1
 parse_arguments() {
     pa_count=0
     while [ "$#" -gt 0 ]; do
@@ -862,8 +947,8 @@ parse_arguments() {
 # Resolves the requested source VM slot to an LVM-backed device path for the copy helper.
 resolve_source() {
     require_qemu_vm "$SRC_VM"; require_qemu_vm "$DST_VM"
-    cbv_volid="$(disk_volid "$SRC_VM" "$SLOT" || :)"; [ -n "$cbv_volid" ] || die "No disk volume found at $SLOT."
-    PATH_SRC="$(resolve_volid_path "$cbv_volid" || :)"; [ -n "$PATH_SRC" ] || die "Cannot resolve $cbv_volid."
+    rs_volid="$(disk_volid "$SRC_VM" "$SLOT" || :)"; [ -n "$rs_volid" ] || die "No disk volume found at $SLOT."
+    PATH_SRC="$(resolve_volid_path "$rs_volid" || :)"; [ -n "$PATH_SRC" ] || die "Cannot resolve $rs_volid."
     lvs "$PATH_SRC" >/dev/null 2>&1 || die "Source disk is not LVM-backed: $PATH_SRC"
 }
 
@@ -873,10 +958,149 @@ resolve_source() {
 
 # run_embedded_create_disk_copy_and_add_to_vm
 # Executes the bundled create-disk-copy-and-add-to-vm.sh implementation without requiring a companion file.
+# Call: run_embedded_create_disk_copy_and_add_to_vm [ARG...]
 run_embedded_create_disk_copy_and_add_to_vm() {
     /bin/sh -s -- "$@" <<'__PROXMOX_LONGTAIL_EMBEDDED_CREATE_DISK_COPY_AND_ADD_TO_VM__'
 #!/bin/sh
 set -eu
+
+############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    MODE="hot"; MODE_ARG=""
+    ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
+    SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
+    SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
+    REQUESTED_DEST_DISK=""; REQUESTED_DEST_SLOT_SELECTOR=""; REQUESTED_DEST_VG=""
+    BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
+    CREATED=0; ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; SOURCE_ACTIVATED_BY_US=0
+    define_colours
+    parse_arguments "$@"
+    check_elevation
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    need_commands lvs vgs lvcreate lvremove lvchange qm pvesm blockdev readlink awk grep sed dd cmp sort tail find
+    resolve_source
+    validate_destination_vm
+    resolve_destination_attachment
+    DEST_VG="${REQUESTED_DEST_VG:-$SOURCE_VG}"
+    vgs "$DEST_VG" >/dev/null 2>&1 || die "Destination volume group does not exist: $DEST_VG"
+    select_destination_storage
+    select_disk_name
+    TARGET_STATUS="$(qm status "$DEST_VMID" 2>/dev/null | awk '{print $2}' || :)"
+    print_plan
+    install_transaction_traps
+    apply_source_state
+    ensure_source_device
+    create_destination
+    verify_storage_mapping
+    copy_data
+    verify_copy
+    release_source_device || die "Could not restore the source LV activation state."
+    attach_copy
+    set_destination_boot_first "$DEST_VMID" "$SCSI_DEVICE"
+    restore_source_state
+    verify_result
+    COMPLETE=1
+    trap - 0 HUP INT TERM
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() {
+    print_banner "Disk copied and attached successfully"
+    printf 'Source:           %s\n' "$SOURCE_PATH"
+    [ -z "$SOURCE_VM" ] || printf 'Source VM:        %s%s\n' "$SOURCE_VM" "${SOURCE_SLOT:+ ($SOURCE_SLOT)}"
+    printf 'Copy:             %s\n' "$NEW_LV_PATH"
+    printf 'Proxmox volume:   %s\n' "$NEW_VOLID"
+    printf 'Destination VM:   %s\n' "$DEST_VMID"
+    printf 'Attached as:      %s\n' "$SCSI_DEVICE"
+    printf 'Backing disk:     disk-%s\n' "$DISK_NUMBER"
+    printf 'State mode:       %s\n\n' "$MODE"
+    dryrun_summary
+}
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+
+DESCRIPTION
+  Creates a full independent copy of an LVM-backed source disk and attaches it
+  to a destination QEMU VM.
+
+SOURCE SELECTORS
+  <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0 or /dev/pve/base-123-disk-0.
+  <source-vmid> disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
+  <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  Exact source slots must already exist and must be storage-backed disks.
+
+DESTINATION SELECTORS
+  omitted      Attach to the first free SCSI slot; choose the next free disk-N.
+  disk-N       Use that backing disk number; attach to the first free SCSI slot.
+  sata0        Attach specifically at sata0; choose the next free backing disk-N.
+  ide2         Attach specifically at ide2.
+  scsi4        Attach specifically at scsi4.
+  virtio0      Attach specifically at virtio0.
+  sata         Attach to the first free SATA slot.
+  ide          Attach to the first free IDE slot.
+  scsi         Attach to the first free SCSI slot.
+  virtio       Attach to the first free VirtIO slot.
+
+  Exact destination slots must be empty. Use an overwrite helper when the
+  selected slot is already occupied.
+
+SOURCE ACTIVATION
+  If a valid LVM source exists but has no active block device (common for a
+  template/base LV), it is temporarily activated for copy/verification and
+  restored to inactive afterward. Its LVM permission is not changed.
+
+SOURCE VM STATE
+  default/hot  Do not pause or stop the source VM.
+  pause        Pause a running source VM while the copy is created and verified.
+  stop         Stop a running source VM and leave it stopped.
+  restart      Stop a running source VM, create/verify/attach the copy, then start it.
+
+OPTIONAL KEYWORDS
+  boot         Make the actual destination slot the first device in VM boot order.
+  dryrun       Perform real read-only preflight and print mutations without executing them.
+
+  hot, pause, stop, restart, boot, dryrun and --dryrun may appear anywhere.
+
+BACKWARD COMPATIBILITY
+  In the full-path form, a non-selector third positional value is still treated
+  as destination-vg, matching the previous interface.
+
+EXAMPLES
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 sata boot dryrun
+  $(basename "$0") 123 sata0 456 virtio0 restart boot dryrun
+  $(basename "$0") 123 disk-0 456 disk-3 fastvg pause dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 fastvg dryrun
+
+EOF
+    dryrun_help
+}
 
 ############################################################
 # EMBEDDED SHARED RUNTIME
@@ -902,11 +1126,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -918,15 +1148,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -935,10 +1167,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -947,6 +1181,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -999,6 +1234,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -1011,6 +1247,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -1042,6 +1279,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -1059,6 +1297,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -1073,6 +1312,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -1105,14 +1345,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -1198,6 +1441,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -1213,6 +1457,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -1227,6 +1472,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -1235,10 +1481,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -1246,6 +1494,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -1265,6 +1514,7 @@ dryrun_summary() {
 
 # set_state_mode MODE
 # Selects at most one of hot/pause/stop/restart; hot is the default.
+# Call: set_state_mode MODE
 set_state_mode() {
     ssm_new="$1"
     if [ -n "${MODE_ARG:-}" ] && [ "$MODE_ARG" != "$ssm_new" ]; then die "Choose only one of pause, stop, or restart."; fi
@@ -1286,6 +1536,7 @@ normalize_disk_number() (
 
 # disk_slot_limit BUS
 # Prints the highest supported Proxmox QEMU disk index for a bus.
+# Call: disk_slot_limit BUS
 disk_slot_limit() {
     case "$1" in
         ide) printf '%s\n' 3 ;;
@@ -1437,6 +1688,7 @@ discover_source_owner() {
 
 # resolve_source
 # Resolves either a full LV path or VMID + disk selector to SOURCE_* metadata.
+# Call: resolve_source ARG1 [ARG2]
 resolve_source() {
     if [ "$SOURCE_FORM" = "path" ]; then
         assert_lv_exists "$SOURCE_INPUT"
@@ -1475,6 +1727,7 @@ resolve_source() {
 
 # apply_source_state
 # Applies pause/stop/restart preparation to the source VM when requested.
+# Call: apply_source_state ARG1 [ARG2]
 apply_source_state() {
     [ "$SOURCE_ACTIVE" -eq 1 ] || return 0
     case "$MODE" in
@@ -1512,6 +1765,7 @@ restore_source_state() {
     return 0
 }
 
+# Call: select_destination_storage ARG1 [ARG2] [ARG3]
 select_destination_storage() {
     [ -f /etc/pve/storage.cfg ] || die "Proxmox storage configuration not found: /etc/pve/storage.cfg"
     sds_matches="$(awk -v wanted_vg="$DEST_VG" '
@@ -1587,12 +1841,12 @@ ensure_source_device() {
     [ -b "$SOURCE_PATH" ] && return 0
     info "Source LV is inactive; temporarily activating it for the block copy..."
     if dryrun_enabled; then
-        dryrun_cmd lvchange -ay "${SOURCE_VG}/${SOURCE_LV}"
+        dryrun_cmd lvchange -ay -K "${SOURCE_VG}/${SOURCE_LV}"
         SOURCE_ACTIVATED_BY_US=1
         dryrun_verify "Source LV would be active and readable for the copy"
         return 0
     fi
-    run_lvm_filtered lvchange -ay "${SOURCE_VG}/${SOURCE_LV}" || die "Could not activate source LV for block copying: ${SOURCE_VG}/${SOURCE_LV}"
+    run_lvm_filtered lvchange -ay -K "${SOURCE_VG}/${SOURCE_LV}" || die "Could not activate source LV for block copying: ${SOURCE_VG}/${SOURCE_LV}"
     SOURCE_ACTIVATED_BY_US=1
     [ -b "$SOURCE_PATH" ] || die "Source LV activation succeeded but no block device appeared: $SOURCE_PATH"
     return 0
@@ -1657,6 +1911,7 @@ set_destination_boot_first() {
 
 # verify_destination_boot_first VMID SLOT
 # Verifies the boot keyword postcondition.
+# Call: verify_destination_boot_first VMID SLOT
 verify_destination_boot_first() {
     [ "$BOOT_REQUESTED" -eq 1 ] || return 0
     if dryrun_enabled; then dryrun_verify "VM $1 boot order would start with $2"; return 0; fi
@@ -1664,132 +1919,10 @@ verify_destination_boot_first() {
 }
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.7"
-    MODE="hot"; MODE_ARG=""
-    ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
-    SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
-    SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
-    REQUESTED_DEST_DISK=""; REQUESTED_DEST_SLOT_SELECTOR=""; REQUESTED_DEST_VG=""
-    BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
-    CREATED=0; ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; SOURCE_ACTIVATED_BY_US=0
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs vgs lvcreate lvremove lvchange qm pvesm blockdev readlink awk grep sed dd cmp sort tail find
-    resolve_source
-    validate_destination_vm
-    resolve_destination_attachment
-    DEST_VG="${REQUESTED_DEST_VG:-$SOURCE_VG}"
-    vgs "$DEST_VG" >/dev/null 2>&1 || die "Destination volume group does not exist: $DEST_VG"
-    select_destination_storage
-    select_disk_name
-    TARGET_STATUS="$(qm status "$DEST_VMID" 2>/dev/null | awk '{print $2}' || :)"
-    print_plan
-    install_transaction_traps
-    apply_source_state
-    ensure_source_device
-    create_destination
-    verify_storage_mapping
-    copy_data
-    verify_copy
-    release_source_device || die "Could not restore the source LV activation state."
-    attach_copy
-    set_destination_boot_first "$DEST_VMID" "$SCSI_DEVICE"
-    restore_source_state
-    verify_result
-    COMPLETE=1
-    trap - 0 HUP INT TERM
-}
-
-end() {
-    print_banner "Disk copied and attached successfully"
-    printf 'Source:           %s\n' "$SOURCE_PATH"
-    [ -z "$SOURCE_VM" ] || printf 'Source VM:        %s%s\n' "$SOURCE_VM" "${SOURCE_SLOT:+ ($SOURCE_SLOT)}"
-    printf 'Copy:             %s\n' "$NEW_LV_PATH"
-    printf 'Proxmox volume:   %s\n' "$NEW_VOLID"
-    printf 'Destination VM:   %s\n' "$DEST_VMID"
-    printf 'Attached as:      %s\n' "$SCSI_DEVICE"
-    printf 'Backing disk:     disk-%s\n' "$DISK_NUMBER"
-    printf 'State mode:       %s\n\n' "$MODE"
-    dryrun_summary
-}
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() {
-    cat <<EOF
-$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
-
-USAGE
-  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
-
-DESCRIPTION
-  Creates a full independent copy of an LVM-backed source disk and attaches it
-  to a destination QEMU VM.
-
-SOURCE SELECTORS
-  <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0 or /dev/pve/base-123-disk-0.
-  <source-vmid> disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
-  <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
-  Exact source slots must already exist and must be storage-backed disks.
-
-DESTINATION SELECTORS
-  omitted      Attach to the first free SCSI slot; choose the next free disk-N.
-  disk-N       Use that backing disk number; attach to the first free SCSI slot.
-  sata0        Attach specifically at sata0; choose the next free backing disk-N.
-  ide2         Attach specifically at ide2.
-  scsi4        Attach specifically at scsi4.
-  virtio0      Attach specifically at virtio0.
-  sata         Attach to the first free SATA slot.
-  ide          Attach to the first free IDE slot.
-  scsi         Attach to the first free SCSI slot.
-  virtio       Attach to the first free VirtIO slot.
-
-  Exact destination slots must be empty. Use an overwrite helper when the
-  selected slot is already occupied.
-
-SOURCE ACTIVATION
-  If a valid LVM source exists but has no active block device (common for a
-  template/base LV), it is temporarily activated for copy/verification and
-  restored to inactive afterward. Its LVM permission is not changed.
-
-SOURCE VM STATE
-  default/hot  Do not pause or stop the source VM.
-  pause        Pause a running source VM while the copy is created and verified.
-  stop         Stop a running source VM and leave it stopped.
-  restart      Stop a running source VM, create/verify/attach the copy, then start it.
-
-OPTIONAL KEYWORDS
-  boot         Make the actual destination slot the first device in VM boot order.
-  dryrun       Perform real read-only preflight and print mutations without executing them.
-
-  hot, pause, stop, restart, boot, dryrun and --dryrun may appear anywhere.
-
-BACKWARD COMPATIBILITY
-  In the full-path form, a non-selector third positional value is still treated
-  as destination-vg, matching the previous interface.
-
-EXAMPLES
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 sata boot dryrun
-  $(basename "$0") 123 sata0 456 virtio0 restart boot dryrun
-  $(basename "$0") 123 disk-0 456 disk-3 fastvg pause dryrun
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 fastvg dryrun
-
-EOF
-    dryrun_help
-}
-
+# Call: parse_arguments ARG1
 parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1848,6 +1981,7 @@ parse_arguments() {
 
 # assign_destination_selector SELECTOR
 # Classifies and stores a backing disk number, exact slot, or destination bus.
+# Call: assign_destination_selector SELECTOR
 assign_destination_selector() {
     ads_value="$1"
     if ! ads_kind="$(destination_selector_kind "$ads_value" 2>/dev/null)"; then return 1; fi

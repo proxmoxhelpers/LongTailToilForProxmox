@@ -2,6 +2,107 @@
 set -eu
 
 ############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    MODE="hot"; MODE_ARG=""; ARG1=""; ARG2=""; ARG3=""; ARG_COUNT=0
+    REFS_FILE=""; SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_VALUE=""; SOURCE_VOLID=""; SOURCE_ACTIVE=0
+    SOURCE_STATUS=""; SOURCE_UNUSED=""; DEST_SLOT=""; DEST_TOUCHED=0; DEST_ATTACHED=0; SOURCE_DETACHED=0
+    PAUSED_BY_US=0; STOPPED_BY_US=0; STATE_RESTORED=0; TRANSFER_COMPLETE=0
+    define_colours
+    parse_arguments "$@"
+    check_elevation
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    need_commands qm pvesm lvs find awk sed grep sort readlink dmsetup findmnt mktemp
+    resolve_destination
+    resolve_source
+    validate_source_references
+    validate_source_guest_config
+    validate_source_usage
+    validate_pause_detach_capability
+    DEST_SLOT="$(first_free_scsi "$DEST_VM")" || die "Destination VM $DEST_VM has no free SCSI slot."
+    print_transfer_plan
+    install_transfer_traps
+    apply_source_state
+    transfer_volume
+    restore_source_state
+    verify_transfer
+    TRANSFER_COMPLETE=1
+    remove_temp_files
+    trap - 0 HUP INT TERM
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() {
+    ok "Moved $LV to VM $DEST_VM as $DEST_SLOT."
+    if [ -n "$SOURCE_VM" ]; then info "Source VM: $SOURCE_VM ($SOURCE_SLOT removed)"; fi
+    case "$MODE" in
+        pause) [ "$PAUSED_BY_US" -eq 1 ] && info "Source VM resumed after the move." || : ;;
+        stop) [ "$STOPPED_BY_US" -eq 1 ] && info "Source VM remains stopped." || : ;;
+        restart) [ "$STOPPED_BY_US" -eq 1 ] && info "Source VM restarted after the move." || : ;;
+    esac
+    dryrun_summary
+}
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <full-lv-path> <destination-vmid> [pause|stop|restart] [dryrun]
+  $(basename "$0") <source-vmid> <disk-number|slot> <destination-vmid> [pause|stop|restart] [dryrun]
+
+DESCRIPTION
+  Moves an existing LVM-backed QEMU disk reference to another QEMU VM without
+  copying or renaming the LV. The destination uses its first free SCSI slot.
+
+  The numeric disk form selects a managed backing volume vm-SOURCE-disk-N or base-SOURCE-disk-N; stale embedded IDs are accepted only when the disk number is otherwise unambiguous.
+  An explicit source slot such as scsi0, sata1, virtio2, or unused0 is also
+  accepted.
+
+SOURCE VM STATE
+  default   Hot-swap. Do not stop or pause the source VM.
+  pause     Suspend a running source VM before detach, then resume it.
+            For SCSI disks, pause requires a shared controller with another
+            active SCSI disk; virtio-scsi-single and last-disk controller
+            removal are refused before mutation because Proxmox cannot safely
+            hot-unplug those controllers while the VM is suspended.
+  stop      Stop a running source VM before detach and leave it stopped.
+  restart   Stop a running source VM before detach, then start it again.
+
+  pause, stop, restart, dryrun and --dryrun may appear anywhere. Only one of
+  pause/stop/restart may be selected. A VM that was already stopped is never
+  started automatically.
+
+EXAMPLES
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 dryrun
+  $(basename "$0") 123 0 456 pause dryrun
+  $(basename "$0") restart 123 scsi0 456
+
+EOF
+    dryrun_help
+}
+
+############################################################
 # EMBEDDED SHARED RUNTIME
 #
 # This command is intentionally self-contained. The common and
@@ -25,11 +126,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -41,15 +148,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -58,10 +167,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -70,6 +181,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -122,6 +234,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -134,6 +247,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -165,6 +279,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -182,6 +297,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -196,6 +312,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -228,14 +345,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -321,6 +441,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -336,6 +457,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -350,6 +472,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -358,10 +481,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -369,6 +494,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -383,103 +509,19 @@ dryrun_summary() {
 
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.4"
-    MODE="hot"; MODE_ARG=""; ARG1=""; ARG2=""; ARG3=""; ARG_COUNT=0
-    REFS_FILE=""; SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_VALUE=""; SOURCE_VOLID=""; SOURCE_ACTIVE=0
-    SOURCE_STATUS=""; SOURCE_UNUSED=""; DEST_SLOT=""; DEST_TOUCHED=0; DEST_ATTACHED=0; SOURCE_DETACHED=0
-    PAUSED_BY_US=0; STOPPED_BY_US=0; STATE_RESTORED=0; TRANSFER_COMPLETE=0
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands qm pvesm lvs find awk sed grep sort readlink dmsetup findmnt mktemp
-    resolve_destination
-    resolve_source
-    validate_source_references
-    validate_source_guest_config
-    validate_source_usage
-    validate_pause_detach_capability
-    DEST_SLOT="$(first_free_scsi "$DEST_VM")" || die "Destination VM $DEST_VM has no free SCSI slot."
-    print_transfer_plan
-    install_transfer_traps
-    apply_source_state
-    transfer_volume
-    restore_source_state
-    verify_transfer
-    TRANSFER_COMPLETE=1
-    remove_temp_files
-    trap - 0 HUP INT TERM
-}
-
-end() {
-    ok "Moved $LV to VM $DEST_VM as $DEST_SLOT."
-    if [ -n "$SOURCE_VM" ]; then info "Source VM: $SOURCE_VM ($SOURCE_SLOT removed)"; fi
-    case "$MODE" in
-        pause) [ "$PAUSED_BY_US" -eq 1 ] && info "Source VM resumed after the move." || : ;;
-        stop) [ "$STOPPED_BY_US" -eq 1 ] && info "Source VM remains stopped." || : ;;
-        restart) [ "$STOPPED_BY_US" -eq 1 ] && info "Source VM restarted after the move." || : ;;
-    esac
-    dryrun_summary
-}
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() {
-    cat <<EOF
-$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
-
-USAGE
-  $(basename "$0") <full-lv-path> <destination-vmid> [pause|stop|restart] [dryrun]
-  $(basename "$0") <source-vmid> <disk-number|slot> <destination-vmid> [pause|stop|restart] [dryrun]
-
-DESCRIPTION
-  Moves an existing LVM-backed QEMU disk reference to another QEMU VM without
-  copying or renaming the LV. The destination uses its first free SCSI slot.
-
-  The numeric disk form selects a managed backing volume vm-SOURCE-disk-N or base-SOURCE-disk-N; stale embedded IDs are accepted only when the disk number is otherwise unambiguous.
-  An explicit source slot such as scsi0, sata1, virtio2, or unused0 is also
-  accepted.
-
-SOURCE VM STATE
-  default   Hot-swap. Do not stop or pause the source VM.
-  pause     Suspend a running source VM before detach, then resume it.
-            For SCSI disks, pause requires a shared controller with another
-            active SCSI disk; virtio-scsi-single and last-disk controller
-            removal are refused before mutation because Proxmox cannot safely
-            hot-unplug those controllers while the VM is suspended.
-  stop      Stop a running source VM before detach and leave it stopped.
-  restart   Stop a running source VM before detach, then start it again.
-
-  pause, stop, restart, dryrun and --dryrun may appear anywhere. Only one of
-  pause/stop/restart may be selected. A VM that was already stopped is never
-  started automatically.
-
-EXAMPLES
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 dryrun
-  $(basename "$0") 123 0 456 pause dryrun
-  $(basename "$0") restart 123 scsi0 456
-
-EOF
-    dryrun_help
-}
-
 # set_transfer_mode MODE
 # Accepts one state-control mode and rejects conflicting mode keywords.
+# Call: set_transfer_mode MODE
 set_transfer_mode() {
     stm_new="$1"
     if [ -n "$MODE_ARG" ] && [ "$MODE_ARG" != "$stm_new" ]; then die "Choose only one of pause, stop, or restart."; fi
     MODE="$stm_new"; MODE_ARG="$stm_new"
 }
 
+# Call: parse_arguments ARG1
 parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -556,6 +598,7 @@ resolve_source_by_path() {
 
 # resolve_source_by_vm
 # Resolves a numeric managed-volume disk-N selector (vm/base) or explicit QEMU disk slot.
+# Call: resolve_source_by_vm ARG1 [ARG2]
 resolve_source_by_vm() {
     require_qemu_vm "$SOURCE_VM"
     case "$DISK_SELECTOR" in
@@ -635,9 +678,9 @@ validate_source_references() {
 # Rejects source locks/snapshot sections and warns when the removed slot is in boot order.
 validate_source_guest_config() {
     [ -n "$SOURCE_VM" ] || return 0
-    vsg_cfg="/etc/pve/qemu-server/${SOURCE_VM}.conf"
-    if grep -qE '^lock:[[:space:]]*' "$vsg_cfg"; then die "Source VM $SOURCE_VM is locked; resolve the lock before moving a disk."; fi
-    if grep -qE '^\[[^]]+\]$' "$vsg_cfg"; then die "Source VM $SOURCE_VM has snapshot/config sections; remove snapshots before moving a disk."; fi
+    vsgc_cfg="/etc/pve/qemu-server/${SOURCE_VM}.conf"
+    if grep -qE '^lock:[[:space:]]*' "$vsgc_cfg"; then die "Source VM $SOURCE_VM is locked; resolve the lock before moving a disk."; fi
+    if grep -qE '^\[[^]]+\]$' "$vsgc_cfg"; then die "Source VM $SOURCE_VM has snapshot/config sections; remove snapshots before moving a disk."; fi
     if [ "$SOURCE_ACTIVE" -eq 1 ] && qm config "$SOURCE_VM" | sed -n 's/^boot:[[:space:]]*//p' | grep -F "$SOURCE_SLOT" >/dev/null 2>&1; then
         warn "Source boot order references $SOURCE_SLOT; review the source VM boot order after moving this disk."
     fi
@@ -647,6 +690,7 @@ validate_source_guest_config() {
 # validate_source_usage
 # Refuses host mounts and, when no active source VM legitimately owns the LV,
 # refuses any remaining device-mapper open count.
+# Call: validate_source_usage ARG1 [ARG2]
 validate_source_usage() {
     vsu_real="$(readlink -f "$LV")"
     if findmnt -rn -S "$LV" >/dev/null 2>&1 || findmnt -rn -S "$vsu_real" >/dev/null 2>&1; then die "The LV is mounted on the host: $LV"; fi
@@ -668,6 +712,7 @@ validate_source_usage() {
 # Refuses a pause-mode SCSI detach topology that Proxmox cannot safely hot-unplug
 # while the VM is suspended (per-disk virtio-scsi-single controllers or the last
 # disk on a shared SCSI controller).
+# Call: validate_pause_detach_capability ARG1
 validate_pause_detach_capability() {
     [ "$MODE" = "pause" ] || return 0
     [ "$SOURCE_ACTIVE" -eq 1 ] || return 0
@@ -740,6 +785,7 @@ apply_source_state() {
 
 # restore_source_state
 # Resumes/starts only state that this invocation changed; stop mode stays stopped.
+# Call: restore_source_state ARG1 [ARG2]
 restore_source_state() {
     if [ "$MODE" = "pause" ] && [ "$PAUSED_BY_US" -eq 1 ]; then
         info "Resuming source VM $SOURCE_VM..."
@@ -851,6 +897,7 @@ attach_destination() {
 # remove_source_unused_reference_only SLOT EXPECTED_VOLID
 # Removes only the unusedN config line. It deliberately does not use
 # qm set --delete because Proxmox may free the backing volume.
+# Call: remove_source_unused_reference_only SLOT EXPECTED_VOLID
 remove_source_unused_reference_only() {
     rsuro_slot="$1"; rsuro_expected="$2"
     rsuro_config="/etc/pve/qemu-server/${SOURCE_VM}.conf"
@@ -892,6 +939,7 @@ remove_source_unused_reference_only() {
 
 # remove_source_unused SLOT
 # Removes only the source config's unusedN reference; it never frees the LV.
+# Call: remove_source_unused SLOT
 remove_source_unused() {
     rsu_slot="$1"; [ -n "$rsu_slot" ] || return 0
     info "Removing source config reference $SOURCE_VM $rsu_slot (LV is preserved)..."

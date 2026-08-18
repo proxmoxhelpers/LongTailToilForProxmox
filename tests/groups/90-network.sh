@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.7"
-    TEST_SUITE_VERSION="2.8.5"
+    PROJECT_VERSION="3.5.1"
+    TEST_SUITE_VERSION="2.9.1"
     TEST_GROUP="network"
     test_reset_counters
     test_parse_arguments "$@"
@@ -28,6 +28,7 @@ main() {
     test_prepare_run
     NETWORK_BRIDGE="$(find_test_bridge || :)"
     if [ -z "$NETWORK_BRIDGE" ]; then skip_case "bulk-change-vm-network.sh — no existing Linux bridge was detected"; return 0; fi
+    create_storage_sandbox
     prepare_network_fixture
     run_case "bulk-change-vm-network.sh QEMU+LXC options/model preservation" test_bulk_network
     run_case "bulk-change-vm-network.sh tag removal/firewall update" test_bulk_network_remove_tag
@@ -46,7 +47,7 @@ end() {
 
 print_plan() {
     print_banner "Bulk VM network tests"
-    printf '%s\n' "Creates two stopped diskless QEMU VMs plus one config-only stopped CT and uses an already-existing Linux bridge."
+    printf '%s\n' "Creates two stopped diskless QEMU VMs plus one stopped CT with a disposable test-owned LVM-thin rootfs, and uses an already-existing Linux bridge."
     printf '%s\n' "No bridge is created or modified. The real cases exercise bridge, VLAN tag, firewall and QEMU model changes while preserving MAC/other NIC options."
     printf '%s\n' "A missing-guest negative case is placed first in the target list so refusal is proven before any mutation."
 }
@@ -68,6 +69,7 @@ find_test_bridge() {
 }
 
 prepare_network_fixture() {
+    test_storage_mapping_owned "$TEST_STORAGE_A" || die "Network fixture storage is not provably owned by this test run: $TEST_STORAGE_A"
     NET_VM1="$(create_test_vm net-a)" || die "Could not create first disposable network-test VM."
     NET_VM2="$(create_test_vm net-b)" || die "Could not create second disposable network-test VM."
     NET_CT="$(create_test_ct net-ct)" || die "Could not create disposable network-test CT config."

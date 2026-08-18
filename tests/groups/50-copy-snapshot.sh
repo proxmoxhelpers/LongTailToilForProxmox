@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.7"
-    TEST_SUITE_VERSION="2.8.5"
+    PROJECT_VERSION="3.5.1"
+    TEST_SUITE_VERSION="2.9.1"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -191,7 +191,7 @@ compare_inactive_test_lv() (
     citl_path="$(lvs --noheadings -o lv_path "$citl_lv" 2>/dev/null | awk '{$1=$1;print}')"
     [ -n "$citl_path" ] || exit 1
     trap 'lvchange -an "$citl_lv" >/dev/null 2>&1 || :' 0 HUP INT TERM
-    lvchange -ay "$citl_lv" >/dev/null
+    lvchange -ay -K "$citl_lv" >/dev/null
     cmp -n "$citl_bytes" "$citl_path" "$citl_dst"
 )
 

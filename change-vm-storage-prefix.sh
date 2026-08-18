@@ -2,6 +2,51 @@
 set -eu
 
 ############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    CONFIG_FILE=""
+    define_colours
+    parse_arguments "$@"
+    check_elevation
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    install_temp_cleanup
+    need_commands qm pct pvesm grep cp sed readlink mktemp
+    validate_storage_ids
+    collect_configs
+    [ -s "$CONFIG_FILE" ] || { info "No local guest configs reference $OLD."; return 0; }
+    validate_configs
+    rewrite_configs
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() {
+    [ -z "${CONFIG_FILE:-}" ] || rm -f "$CONFIG_FILE"
+    dryrun_summary
+}
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() { printf 'Usage: %s <old-storage-id> <new-storage-id> [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+
+############################################################
 # EMBEDDED SHARED RUNTIME
 #
 # This command is intentionally self-contained. The common and
@@ -25,11 +70,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -41,15 +92,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -58,10 +111,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -70,6 +125,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -122,6 +178,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -134,6 +191,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -165,6 +223,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -182,6 +241,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -196,6 +256,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -228,14 +289,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -321,6 +385,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -336,6 +401,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -350,6 +416,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -358,10 +425,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -369,6 +438,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -384,39 +454,11 @@ dryrun_summary() {
 
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.0.0"
-    CONFIG_FILE=""
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    install_temp_cleanup
-    need_commands qm pct pvesm grep cp sed readlink mktemp
-    validate_storage_ids
-    collect_configs
-    [ -s "$CONFIG_FILE" ] || { info "No local guest configs reference $OLD."; return 0; }
-    validate_configs
-    rewrite_configs
-}
-
-end() {
-    [ -z "${CONFIG_FILE:-}" ] || rm -f "$CONFIG_FILE"
-    dryrun_summary
-}
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <old-storage-id> <new-storage-id> [dryrun]\n' "$(basename "$0")"; dryrun_help; }
 
+# Call: parse_arguments ARG1
 parse_arguments() {
     pa_count=0
     while [ "$#" -gt 0 ]; do

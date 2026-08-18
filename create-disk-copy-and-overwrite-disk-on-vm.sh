@@ -2,6 +2,149 @@
 set -eu
 
 ############################################################
+# LIFECYCLE
+#
+# setup/main/end are intentionally defined first so the public flow and
+# user-adjustable defaults are visible before implementation helpers.
+############################################################
+
+# setup [ARGS...]
+# Call: setup "$@"
+# Initializes defaults, parses arguments, and performs non-mutating setup.
+setup() {
+    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    MODE="hot"; MODE_ARG=""
+    ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
+    SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
+    SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
+    DEST_FORM=""; DEST_INPUT=""; DEST_VM_INPUT=""; DEST_SELECTOR=""
+    BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
+    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""; NEW_UUID=""; ROLLBACK_FAILED=0; DEST_EXISTS=1; SOURCE_ACTIVATED_BY_US=0
+    define_colours
+    parse_arguments "$@"
+    check_elevation
+}
+
+# main [ARGS...]
+# Call: main "$@"
+# Performs preflight and the command's primary operation.
+main() {
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    need_commands lvs lvcreate lvrename lvremove lvchange qm pvesm blockdev readlink awk grep sed dd cmp sort tail find mktemp cat
+    m_saved_mode="$MODE"; MODE="hot"; resolve_source; MODE="$m_saved_mode"
+    resolve_destination
+    [ "$SOURCE_UUID" != "$DEST_OLD_UUID" ] || die "Source and destination refer to the same logical volume."
+    validate_pause_detach_capability
+    select_destination_allocation
+    select_new_disk_name
+    print_plan
+    install_transaction_traps
+    ensure_source_device
+    create_destination
+    verify_storage_mapping
+    copy_data
+    verify_copy
+    release_source_device || die "Could not restore the source LV activation state."
+    apply_destination_state
+    replace_destination_disk
+    set_destination_boot_first "$DEST_VM" "$DEST_SLOT"
+    restore_destination_state
+    delete_archived_disk
+    verify_result
+    COMPLETE=1
+    trap - 0 HUP INT TERM
+}
+
+# end
+# Call: end
+# Prints/finalizes the command result and performs normal completion cleanup.
+end() {
+    if [ "$DEST_EXISTS" -eq 1 ]; then print_banner "Destination disk overwritten with independent copy"
+    else print_banner "Destination disk created with independent copy"; fi
+    printf 'Source:          %s\n' "$SOURCE_PATH"
+    printf 'Destination VM:  %s\n' "$DEST_VM"
+    printf 'Destination slot: %s\n' "$DEST_SLOT"
+    printf 'Disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
+    printf 'New volume:      %s\n' "$FINAL_VOLID"
+    if [ "$DEST_EXISTS" -eq 1 ]; then
+        if [ "$DELETE_OLD" -eq 1 ]; then printf 'Old volume:      %s (deleted after successful replacement)\n' "$DEST_OLD_VOLID"
+        else printf 'Old volume:      %s -> %s (preserved as unusedN)\n' "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; fi
+    else
+        printf 'Old volume:      none\n'
+    fi
+    printf 'State mode:      %s\n\n' "$MODE"
+    dryrun_summary
+}
+
+# usage
+# Call: usage
+# Prints command-line usage and exits only when the caller chooses to exit.
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+
+DESCRIPTION
+  Creates an independent copy from the source and places it on the requested destination
+  VM. Existing destination disks are replaced transactionally; empty exact/bus
+  destinations create a new disk.
+
+SOURCE SELECTORS
+  <source-lv-path>      Full LVM path.
+  <source-vmid> disk-N  Resolve a managed vm-/base- backing volume.
+  <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
+
+DESTINATION SELECTORS
+  disk-N       Target that backing disk number. If absent, create it on first free SCSI.
+  sata0        Use exactly sata0; replace it if occupied, create there if empty.
+  ide2         Use exactly ide2.
+  scsi4        Use exactly scsi4.
+  virtio0      Use exactly virtio0.
+  sata         Use the first free SATA slot and choose a free backing disk number.
+  ide          Use the first free IDE slot and choose a free backing disk number.
+  scsi         Use the first free SCSI slot and choose a free backing disk number.
+  virtio       Use the first free VirtIO slot and choose a free backing disk number.
+
+SOURCE ACTIVATION
+  If a valid LVM source exists but has no active block device (common for a
+  template/base LV), it is temporarily activated for copy/verification and
+  restored to inactive afterward. Its LVM permission is not changed.
+
+DESTINATION VM STATE
+  default/hot  Replace/add without pausing or stopping the destination VM.
+  pause        Pause a running destination VM during replacement, then resume.
+               For SCSI targets, pause requires a shared controller with another
+               active SCSI disk. virtio-scsi-single and last-SCSI-controller
+               removal are refused before mutation because Proxmox rejects that
+               hot-unplug while the VM is suspended.
+  stop         Stop a running destination VM and leave it stopped.
+  restart      Stop a running destination VM, change the disk, then start it.
+
+OPTIONAL KEYWORDS
+  delete       Permanently remove the displaced old disk after successful verification.
+               Has no effect when the selected destination slot/disk was empty.
+  boot         Make the actual destination slot first in the VM boot order.
+  dryrun       Perform real read-only preflight and print mutations without executing them.
+
+  hot, pause, stop, restart, delete, boot, dryrun and --dryrun may appear anywhere.
+
+EXAMPLES
+  $(basename "$0") 123 sata0 456 sata0 boot dryrun
+  $(basename "$0") 123 disk-0 456 virtio delete restart boot dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 scsi4 pause dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 delete dryrun
+
+EOF
+    dryrun_help
+}
+
+############################################################
 # EMBEDDED SHARED RUNTIME
 #
 # This command is intentionally self-contained. The common and
@@ -25,11 +168,17 @@ define_colours() {
     fi
 }
 
+# Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
+# Call: info [ARG...]
 info() { printf '%s%s%s\n' "$C_CYAN" "$*" "$C_RESET"; }
+# Call: ok [ARG...]
 ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+# Call: warn [ARG...]
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+# Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+# Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
 # trim
@@ -41,15 +190,17 @@ trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 ############################################################
 
 # check_elevation
-# Sets APP_ELEVATED to true or false and reports the current privilege state.
+# Call: check_elevation
+# Sets APP_ELEVATED silently. Elevation is reported only when it is required.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; ok "Elevation: running as root."
-    else APP_ELEVATED="false"; warn "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
 # self_elevate ARGS...
 # Re-executes the current script through sudo while preserving all arguments.
+# Call: self_elevate ARGS...
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
     warn "Re-running with root privileges..."
@@ -58,10 +209,12 @@ self_elevate() {
 
 # require_command COMMAND
 # Exits when COMMAND is unavailable.
+# Call: require_command COMMAND
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"; }
 
 # need_commands COMMAND...
 # Requires every named command.
+# Call: need_commands COMMAND...
 need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 ############################################################
@@ -70,6 +223,7 @@ need_commands() { for nc_cmd in "$@"; do require_command "$nc_cmd"; done; }
 
 # register_temp_file PATH
 # Registers a process-owned temporary file for best-effort removal on exit.
+# Call: register_temp_file PATH
 register_temp_file() {
     rtf_path="$1"; [ -n "$rtf_path" ] || return 0
     TEMP_FILES="${TEMP_FILES:-}${TEMP_FILES:+
@@ -122,6 +276,7 @@ install_temp_cleanup() {
 
 # require_qemu_vm VMID
 # Validates a local QEMU VM and rejects LXC IDs explicitly.
+# Call: require_qemu_vm VMID
 require_qemu_vm() {
     rqv_id="$1"
     case "$rqv_id" in ''|*[!0-9]*) die "VMID must be numeric: $rqv_id" ;; esac
@@ -134,6 +289,7 @@ require_qemu_vm() {
 
 # require_guest_stopped VMID [qemu|lxc]
 # Requires the requested guest to be stopped.
+# Call: require_guest_stopped VMID [qemu|lxc]
 require_guest_stopped() {
     rgs_id="$1"; rgs_kind="${2:-qemu}"
     if [ "$rgs_kind" = "qemu" ]; then rgs_status="$(qm status "$rgs_id" 2>/dev/null | awk '{print $2}')"
@@ -165,6 +321,7 @@ first_free_unused() (
 
 # disk_value VMID SLOT
 # Prints the complete value configured at a VM disk slot.
+# Call: disk_value VMID SLOT
 disk_value() { qm config "$1" | sed -n "s/^${2}:[[:space:]]*//p" | head -n1; }
 
 # disk_volid VMID SLOT
@@ -182,6 +339,7 @@ all_guest_configs() { find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf
 
 # guest_volume_references
 # Prints config|slot|storage:volume for configured guest volumes.
+# Call: guest_volume_references ARG1 [ARG2]
 guest_volume_references() {
     all_guest_configs | while IFS= read -r gvr_cfg; do
         awk -F': ' -v cfg="$gvr_cfg" '
@@ -196,6 +354,7 @@ guest_volume_references() {
 
 # config_volume_references CONFIG
 # Prints slot|storage:volume for one guest configuration.
+# Call: config_volume_references CONFIG
 config_volume_references() {
     awk -F': ' '
         $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ || $1 == "rootfs" || $1 ~ /^mp[0-9]+$/ {
@@ -228,14 +387,17 @@ other_volume_references() (
 
 # resolve_volid_path VOLID
 # Resolves a Proxmox volume ID to its path.
+# Call: resolve_volid_path VOLID
 resolve_volid_path() { pvesm path "$1" 2>/dev/null; }
 
 # canonical_lv_path LV
 # Prints the canonical LVM lv_path reported by LVM metadata.
+# Call: canonical_lv_path LV
 canonical_lv_path() { lvs --noheadings -o lv_path "$1" 2>/dev/null | trim; }
 
 # assert_lv_exists LV
 # Exits unless LV exists.
+# Call: assert_lv_exists LV
 assert_lv_exists() { lvs "$1" >/dev/null 2>&1 || die "Logical volume does not exist: $1"; }
 
 # assert_lv_idle LV
@@ -321,6 +483,7 @@ enable_dryrun() { DRY_RUN=1; export DRY_RUN; }
 
 # is_dryrun_arg ARG
 # Recognizes the two accepted dry-run keyword forms.
+# Call: is_dryrun_arg ARG
 is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac; }
 
 # dryrun_help
@@ -336,6 +499,7 @@ EOF
 
 # shell_quote ARG
 # Prints one shell-readable representation for diagnostic command output.
+# Call: shell_quote ARG
 shell_quote() {
     sq_arg="$1"
     case "$sq_arg" in
@@ -350,6 +514,7 @@ shell_quote() {
 
 # dryrun_print_command COMMAND...
 # Prints a shell-escaped command line without executing it.
+# Call: dryrun_print_command COMMAND...
 dryrun_print_command() {
     printf '%s[DRYRUN]%s' "${C_YELLOW:-}" "${C_RESET:-}"
     for dpc_arg in "$@"; do printf ' '; shell_quote "$dpc_arg"; done
@@ -358,10 +523,12 @@ dryrun_print_command() {
 
 # dryrun_print_shell TEXT...
 # Prints a descriptive shell operation that may include placeholders.
+# Call: dryrun_print_shell TEXT...
 dryrun_print_shell() { printf '%s[DRYRUN]%s %s\n' "${C_YELLOW:-}" "${C_RESET:-}" "$*"; }
 
 # dryrun_cmd COMMAND...
 # Executes COMMAND normally or prints it and returns simulated success.
+# Call: dryrun_cmd COMMAND...
 dryrun_cmd() {
     if dryrun_enabled; then dryrun_print_command "$@"; return 0; fi
     "$@"
@@ -369,6 +536,7 @@ dryrun_cmd() {
 
 # dryrun_verify DESCRIPTION
 # Prints a simulated verification result during dry-run mode.
+# Call: dryrun_verify DESCRIPTION
 dryrun_verify() {
     if dryrun_enabled; then printf '%s[DRYRUN VERIFY]%s %s (simulated success)\n' "${C_CYAN:-}" "${C_RESET:-}" "$*"; return 0; fi
     return 1
@@ -388,6 +556,7 @@ dryrun_summary() {
 
 # set_state_mode MODE
 # Selects at most one of hot/pause/stop/restart; hot is the default.
+# Call: set_state_mode MODE
 set_state_mode() {
     ssm_new="$1"
     if [ -n "${MODE_ARG:-}" ] && [ "$MODE_ARG" != "$ssm_new" ]; then die "Choose only one of pause, stop, or restart."; fi
@@ -409,6 +578,7 @@ normalize_disk_number() (
 
 # disk_slot_limit BUS
 # Prints the highest supported Proxmox QEMU disk index for a bus.
+# Call: disk_slot_limit BUS
 disk_slot_limit() {
     case "$1" in
         ide) printf '%s\n' 3 ;;
@@ -560,6 +730,7 @@ discover_source_owner() {
 
 # resolve_source
 # Resolves either a full LV path or VMID + disk selector to SOURCE_* metadata.
+# Call: resolve_source ARG1 [ARG2]
 resolve_source() {
     if [ "$SOURCE_FORM" = "path" ]; then
         assert_lv_exists "$SOURCE_INPUT"
@@ -598,6 +769,7 @@ resolve_source() {
 
 # apply_source_state
 # Applies pause/stop/restart preparation to the source VM when requested.
+# Call: apply_source_state ARG1 [ARG2]
 apply_source_state() {
     [ "$SOURCE_ACTIVE" -eq 1 ] || return 0
     case "$MODE" in
@@ -644,22 +816,24 @@ restore_source_state() {
 # Resolves either full LV path or VMID + disk selector to one active QEMU slot.
 # select_free_destination_disk_number VG
 # Selects the next free managed disk number and uses the destination family.
+# Call: select_free_destination_disk_number VG
 select_free_destination_disk_number() {
-    sfdn_vg="$1"
-    sfdn_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
-    if [ -n "$sfdn_highest" ]; then sfdn_num=$((sfdn_highest + 1)); else sfdn_num=0; fi
+    sfddn_vg="$1"
+    sfddn_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    if [ -n "$sfddn_highest" ]; then sfddn_num=$((sfddn_highest + 1)); else sfddn_num=0; fi
     while :; do
-        sfdn_name="${DEST_PREFIX}-${DEST_VM}-disk-${sfdn_num}"
-        sfdn_busy=0
-        printf '%s\n' "$DEST_CONFIG" | grep -qE "(vm|base)-[0-9]+-disk-${sfdn_num}([,[:space:]]|$)" && sfdn_busy=1 || :
-        lvs "${sfdn_vg}/${sfdn_name}" >/dev/null 2>&1 && sfdn_busy=1 || :
-        [ "$sfdn_busy" -eq 0 ] && break
-        sfdn_num=$((sfdn_num + 1))
+        sfddn_name="${DEST_PREFIX}-${DEST_VM}-disk-${sfddn_num}"
+        sfddn_busy=0
+        printf '%s\n' "$DEST_CONFIG" | grep -qE "(vm|base)-[0-9]+-disk-${sfddn_num}([,[:space:]]|$)" && sfddn_busy=1 || :
+        lvs "${sfddn_vg}/${sfddn_name}" >/dev/null 2>&1 && sfddn_busy=1 || :
+        [ "$sfddn_busy" -eq 0 ] && break
+        sfddn_num=$((sfddn_num + 1))
     done
-    DEST_DISK_NUMBER="$sfdn_num"
-    DEST_OLD_LV="$sfdn_name"
+    DEST_DISK_NUMBER="$sfddn_num"
+    DEST_OLD_LV="$sfddn_name"
 }
 
+# Call: resolve_destination ARG1 [ARG2]
 resolve_destination() {
     DEST_EXISTS=1
     DEST_PREFIX="vm"
@@ -781,6 +955,7 @@ resolve_destination() {
 # validate_pause_detach_capability
 # Refuses pause-mode SCSI replacement topologies that Proxmox cannot safely
 # hot-unplug while the VM is suspended.
+# Call: validate_pause_detach_capability ARG1
 validate_pause_detach_capability() {
     [ "$MODE" = "pause" ] || return 0
     [ "$DEST_EXISTS" -eq 1 ] || return 0
@@ -800,6 +975,7 @@ validate_pause_detach_capability() {
 
 # apply_destination_state
 # Applies the requested hot/pause/stop/restart policy to the VM losing a disk.
+# Call: apply_destination_state ARG1 [ARG2]
 apply_destination_state() {
     case "$MODE" in
         hot) info "Destination VM state: ${DEST_STATUS:-unknown}; hot-swap mode leaves it unchanged." ;;
@@ -838,6 +1014,7 @@ restore_destination_state() {
 
 # old_unused_key
 # Prints the unusedN key currently preserving the displaced destination volume.
+# Call: old_unused_key ARG1 [ARG2]
 old_unused_key() {
     ouk_volid="${1:-$DEST_OLD_VOLID}"
     qm config "$DEST_VM" 2>/dev/null | awk -F': ' -v vol="$ouk_volid" '
@@ -847,6 +1024,7 @@ old_unused_key() {
 
 # lv_name_by_uuid VG UUID
 # Prints the current LV name for an exact LV UUID in one VG.
+# Call: lv_name_by_uuid VG UUID
 lv_name_by_uuid() {
     lnbu_vg="$1"; lnbu_uuid="$2"
     lvs --noheadings -o vg_name,lv_name,lv_uuid 2>/dev/null | awk -v vg="$lnbu_vg" -v uuid="$lnbu_uuid" '
@@ -857,6 +1035,7 @@ lv_name_by_uuid() {
 # rewrite_unused_reference KEY EXPECTED_VOLID NEW_VOLID
 # Rewrites only an unusedN config reference, without invoking qm --delete and
 # therefore without triggering Proxmox storage deletion semantics.
+# Call: rewrite_unused_reference KEY EXPECTED_VOLID NEW_VOLID
 rewrite_unused_reference() {
     rur_key="$1"; rur_expected="$2"; rur_new="$3"
     rur_config="/etc/pve/qemu-server/${DEST_VM}.conf"
@@ -897,6 +1076,7 @@ rewrite_unused_reference() {
 # remove_unused_reference_only KEY EXPECTED_VOLID
 # Removes only the config line. It deliberately does not use qm --delete,
 # because deleting an unusedN entry may also free its backing storage volume.
+# Call: remove_unused_reference_only KEY EXPECTED_VOLID
 remove_unused_reference_only() {
     ruro_key="$1"; ruro_expected="$2"
     ruro_config="/etc/pve/qemu-server/${DEST_VM}.conf"
@@ -921,6 +1101,7 @@ remove_unused_reference_only() {
 
 # add_unused_reference_only KEY VOLID
 # Adds back one unusedN config reference after a failed explicit LV deletion.
+# Call: add_unused_reference_only KEY VOLID
 add_unused_reference_only() {
     auro_key="$1"; auro_volid="$2"
     auro_config="/etc/pve/qemu-server/${DEST_VM}.conf"
@@ -949,19 +1130,19 @@ rollback_old_disk() {
     warn "Attempting to restore original destination disk $DEST_OLD_VOLID at $DEST_SLOT."
 
     if [ "$REPLACEMENT_FINALIZED" -eq 1 ] && [ "$NEW_VG" = "$DEST_VG" ]; then
-        rb_new_name="$(lv_name_by_uuid "$NEW_VG" "$NEW_UUID")"
-        if [ -z "$rb_new_name" ]; then
+        rod_new_name="$(lv_name_by_uuid "$NEW_VG" "$NEW_UUID")"
+        if [ -z "$rod_new_name" ]; then
             warn "Could not locate replacement LV by UUID during rollback."
             ROLLBACK_FAILED=1
             return 1
         fi
-        if [ "$rb_new_name" != "$TEMP_LV_NAME" ]; then
-            [ "$rb_new_name" = "$FINAL_LV_NAME" ] || {
-                warn "Replacement LV has an unexpected name during rollback: $rb_new_name"
+        if [ "$rod_new_name" != "$TEMP_LV_NAME" ]; then
+            [ "$rod_new_name" = "$FINAL_LV_NAME" ] || {
+                warn "Replacement LV has an unexpected name during rollback: $rod_new_name"
                 ROLLBACK_FAILED=1
                 return 1
             }
-            if ! dryrun_cmd lvrename "$NEW_VG" "$rb_new_name" "$TEMP_LV_NAME"; then
+            if ! dryrun_cmd lvrename "$NEW_VG" "$rod_new_name" "$TEMP_LV_NAME"; then
                 warn "Could not move the replacement LV out of the original disk number for rollback."
                 ROLLBACK_FAILED=1
                 return 1
@@ -970,17 +1151,17 @@ rollback_old_disk() {
         NEW_LV_NAME="$TEMP_LV_NAME"; NEW_LV_PATH="$TEMP_LV_PATH"; NEW_VOLID="$TEMP_VOLID"; REPLACEMENT_FINALIZED=0
     fi
 
-    rb_old_name="$(lv_name_by_uuid "$DEST_VG" "$DEST_OLD_UUID")"
-    if dryrun_enabled; then rb_old_name="${rb_old_name:-$ARCHIVE_LV_NAME}"; fi
-    if [ -z "$rb_old_name" ]; then
+    rod_old_name="$(lv_name_by_uuid "$DEST_VG" "$DEST_OLD_UUID")"
+    if dryrun_enabled; then rod_old_name="${rod_old_name:-$ARCHIVE_LV_NAME}"; fi
+    if [ -z "$rod_old_name" ]; then
         warn "Original destination LV UUID $DEST_OLD_UUID cannot be found; automatic rollback is stopping without deleting the replacement."
         ROLLBACK_FAILED=1
         return 1
     fi
 
-    if [ "$rb_old_name" != "$DEST_OLD_LV" ]; then
-        if ! dryrun_cmd lvrename "$DEST_VG" "$rb_old_name" "$DEST_OLD_LV"; then
-            warn "Could not rename original destination LV $rb_old_name back to $DEST_OLD_LV."
+    if [ "$rod_old_name" != "$DEST_OLD_LV" ]; then
+        if ! dryrun_cmd lvrename "$DEST_VG" "$rod_old_name" "$DEST_OLD_LV"; then
+            warn "Could not rename original destination LV $rod_old_name back to $DEST_OLD_LV."
             ROLLBACK_FAILED=1
             return 1
         fi
@@ -993,8 +1174,8 @@ rollback_old_disk() {
     fi
 
     if [ -n "$OLD_UNUSED_KEY" ]; then
-        rb_unused_volid="$(disk_volid "$DEST_VM" "$OLD_UNUSED_KEY" 2>/dev/null || :)"
-        case "$rb_unused_volid" in
+        rod_unused_volid="$(disk_volid "$DEST_VM" "$OLD_UNUSED_KEY" 2>/dev/null || :)"
+        case "$rod_unused_volid" in
             "$ARCHIVE_VOLID") ;;
             "$DEST_OLD_VOLID")
                 if ! rewrite_unused_reference "$OLD_UNUSED_KEY" "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; then
@@ -1073,6 +1254,7 @@ set_destination_boot_first() {
 
 # verify_destination_boot_first VMID SLOT
 # Verifies the boot keyword postcondition.
+# Call: verify_destination_boot_first VMID SLOT
 verify_destination_boot_first() {
     [ "$BOOT_REQUESTED" -eq 1 ] || return 0
     if dryrun_enabled; then dryrun_verify "VM $1 boot order would start with $2"; return 0; fi
@@ -1080,137 +1262,10 @@ verify_destination_boot_first() {
 }
 
 ############################################################
-# SETUP / MAIN / END
-############################################################
-
-setup() {
-    define_colours
-    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.7"
-    MODE="hot"; MODE_ARG=""
-    ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
-    SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
-    SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
-    DEST_FORM=""; DEST_INPUT=""; DEST_VM_INPUT=""; DEST_SELECTOR=""
-    BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
-    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""; NEW_UUID=""; ROLLBACK_FAILED=0; DEST_EXISTS=1; SOURCE_ACTIVATED_BY_US=0
-    parse_arguments "$@"
-    check_elevation
-}
-
-main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs lvcreate lvrename lvremove lvchange qm pvesm blockdev readlink awk grep sed dd cmp sort tail find mktemp cat
-    ro_saved_mode="$MODE"; MODE="hot"; resolve_source; MODE="$ro_saved_mode"
-    resolve_destination
-    [ "$SOURCE_UUID" != "$DEST_OLD_UUID" ] || die "Source and destination refer to the same logical volume."
-    validate_pause_detach_capability
-    select_destination_allocation
-    select_new_disk_name
-    print_plan
-    install_transaction_traps
-    ensure_source_device
-    create_destination
-    verify_storage_mapping
-    copy_data
-    verify_copy
-    release_source_device || die "Could not restore the source LV activation state."
-    apply_destination_state
-    replace_destination_disk
-    set_destination_boot_first "$DEST_VM" "$DEST_SLOT"
-    restore_destination_state
-    delete_archived_disk
-    verify_result
-    COMPLETE=1
-    trap - 0 HUP INT TERM
-}
-
-end() {
-    if [ "$DEST_EXISTS" -eq 1 ]; then print_banner "Destination disk overwritten with independent copy"
-    else print_banner "Destination disk created with independent copy"; fi
-    printf 'Source:          %s\n' "$SOURCE_PATH"
-    printf 'Destination VM:  %s\n' "$DEST_VM"
-    printf 'Destination slot: %s\n' "$DEST_SLOT"
-    printf 'Disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
-    printf 'New volume:      %s\n' "$FINAL_VOLID"
-    if [ "$DEST_EXISTS" -eq 1 ]; then
-        if [ "$DELETE_OLD" -eq 1 ]; then printf 'Old volume:      %s (deleted after successful replacement)\n' "$DEST_OLD_VOLID"
-        else printf 'Old volume:      %s -> %s (preserved as unusedN)\n' "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; fi
-    else
-        printf 'Old volume:      none\n'
-    fi
-    printf 'State mode:      %s\n\n' "$MODE"
-    dryrun_summary
-}
-
-############################################################
 # COMMAND LINE
 ############################################################
 
-usage() {
-    cat <<EOF
-$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
-
-USAGE
-  $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-
-DESCRIPTION
-  Creates an independent copy from the source and places it on the requested destination
-  VM. Existing destination disks are replaced transactionally; empty exact/bus
-  destinations create a new disk.
-
-SOURCE SELECTORS
-  <source-lv-path>      Full LVM path.
-  <source-vmid> disk-N  Resolve a managed vm-/base- backing volume.
-  <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
-  Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
-
-DESTINATION SELECTORS
-  disk-N       Target that backing disk number. If absent, create it on first free SCSI.
-  sata0        Use exactly sata0; replace it if occupied, create there if empty.
-  ide2         Use exactly ide2.
-  scsi4        Use exactly scsi4.
-  virtio0      Use exactly virtio0.
-  sata         Use the first free SATA slot and choose a free backing disk number.
-  ide          Use the first free IDE slot and choose a free backing disk number.
-  scsi         Use the first free SCSI slot and choose a free backing disk number.
-  virtio       Use the first free VirtIO slot and choose a free backing disk number.
-
-SOURCE ACTIVATION
-  If a valid LVM source exists but has no active block device (common for a
-  template/base LV), it is temporarily activated for copy/verification and
-  restored to inactive afterward. Its LVM permission is not changed.
-
-DESTINATION VM STATE
-  default/hot  Replace/add without pausing or stopping the destination VM.
-  pause        Pause a running destination VM during replacement, then resume.
-               For SCSI targets, pause requires a shared controller with another
-               active SCSI disk. virtio-scsi-single and last-SCSI-controller
-               removal are refused before mutation because Proxmox rejects that
-               hot-unplug while the VM is suspended.
-  stop         Stop a running destination VM and leave it stopped.
-  restart      Stop a running destination VM, change the disk, then start it.
-
-OPTIONAL KEYWORDS
-  delete       Permanently remove the displaced old disk after successful verification.
-               Has no effect when the selected destination slot/disk was empty.
-  boot         Make the actual destination slot first in the VM boot order.
-  dryrun       Perform real read-only preflight and print mutations without executing them.
-
-  hot, pause, stop, restart, delete, boot, dryrun and --dryrun may appear anywhere.
-
-EXAMPLES
-  $(basename "$0") 123 sata0 456 sata0 boot dryrun
-  $(basename "$0") 123 disk-0 456 virtio delete restart boot dryrun
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 scsi4 pause dryrun
-  $(basename "$0") /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 delete dryrun
-
-EOF
-    dryrun_help
-}
-
+# Call: parse_arguments ARG1
 parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1298,26 +1353,26 @@ select_new_disk_name() {
     FINAL_LV_PATH="/dev/${NEW_VG}/${FINAL_LV_NAME}"
     FINAL_VOLID="${STORAGE_ID}:${FINAL_LV_NAME}"
 
-    snd_existing_uuid="$(lvs --noheadings -o lv_uuid "${NEW_VG}/${FINAL_LV_NAME}" 2>/dev/null | trim || :)"
+    sndn_existing_uuid="$(lvs --noheadings -o lv_uuid "${NEW_VG}/${FINAL_LV_NAME}" 2>/dev/null | trim || :)"
     if [ "$DEST_EXISTS" -eq 1 ]; then
-        [ -z "$snd_existing_uuid" ] || [ "$snd_existing_uuid" = "$DEST_OLD_UUID" ] || die "Replacement name already exists on another LV: ${NEW_VG}/${FINAL_LV_NAME}"
+        [ -z "$sndn_existing_uuid" ] || [ "$sndn_existing_uuid" = "$DEST_OLD_UUID" ] || die "Replacement name already exists on another LV: ${NEW_VG}/${FINAL_LV_NAME}"
     else
-        [ -z "$snd_existing_uuid" ] || die "Cannot create disk-$DEST_DISK_NUMBER: ${NEW_VG}/${FINAL_LV_NAME} already exists."
+        [ -z "$sndn_existing_uuid" ] || die "Cannot create disk-$DEST_DISK_NUMBER: ${NEW_VG}/${FINAL_LV_NAME} already exists."
         if guest_volume_references | grep -F "|$FINAL_VOLID" >/dev/null 2>&1; then die "Cannot create disk-$DEST_DISK_NUMBER: $FINAL_VOLID is already referenced by a guest configuration."; fi
     fi
 
-    snd_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
-    if [ -n "$snd_highest" ]; then TEMP_DISK_NUMBER=$((snd_highest + 1)); else TEMP_DISK_NUMBER=0; fi
+    sndn_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    if [ -n "$sndn_highest" ]; then TEMP_DISK_NUMBER=$((sndn_highest + 1)); else TEMP_DISK_NUMBER=0; fi
     while :; do
         TEMP_LV_NAME="${DEST_PREFIX}-${DEST_VM}-disk-${TEMP_DISK_NUMBER}"
         [ "$TEMP_LV_NAME" = "$FINAL_LV_NAME" ] && { TEMP_DISK_NUMBER=$((TEMP_DISK_NUMBER + 1)); continue; }
         TEMP_LV_PATH="/dev/${NEW_VG}/${TEMP_LV_NAME}"
         TEMP_VOLID="${STORAGE_ID}:${TEMP_LV_NAME}"
-        snd_busy=0
-        printf '%s\n' "$DEST_CONFIG" | grep -qF "$TEMP_LV_NAME" && snd_busy=1 || :
-        lvs "${NEW_VG}/${TEMP_LV_NAME}" >/dev/null 2>&1 && snd_busy=1 || :
-        guest_volume_references | grep -F "|${TEMP_VOLID}" >/dev/null 2>&1 && snd_busy=1 || :
-        [ "$snd_busy" -eq 0 ] && break
+        sndn_busy=0
+        printf '%s\n' "$DEST_CONFIG" | grep -qF "$TEMP_LV_NAME" && sndn_busy=1 || :
+        lvs "${NEW_VG}/${TEMP_LV_NAME}" >/dev/null 2>&1 && sndn_busy=1 || :
+        guest_volume_references | grep -F "|${TEMP_VOLID}" >/dev/null 2>&1 && sndn_busy=1 || :
+        [ "$sndn_busy" -eq 0 ] && break
         TEMP_DISK_NUMBER=$((TEMP_DISK_NUMBER + 1))
     done
 
@@ -1410,12 +1465,12 @@ ensure_source_device() {
     [ -b "$SOURCE_PATH" ] && return 0
     info "Source LV is inactive; temporarily activating it for the block copy..."
     if dryrun_enabled; then
-        dryrun_cmd lvchange -ay "${SOURCE_VG}/${SOURCE_LV}"
+        dryrun_cmd lvchange -ay -K "${SOURCE_VG}/${SOURCE_LV}"
         SOURCE_ACTIVATED_BY_US=1
         dryrun_verify "Source LV would be active and readable for the copy"
         return 0
     fi
-    run_lvm_filtered lvchange -ay "${SOURCE_VG}/${SOURCE_LV}" || die "Could not activate source LV for block copying: ${SOURCE_VG}/${SOURCE_LV}"
+    run_lvm_filtered lvchange -ay -K "${SOURCE_VG}/${SOURCE_LV}" || die "Could not activate source LV for block copying: ${SOURCE_VG}/${SOURCE_LV}"
     SOURCE_ACTIVATED_BY_US=1
     [ -b "$SOURCE_PATH" ] || die "Source LV activation succeeded but no block device appeared: $SOURCE_PATH"
     return 0

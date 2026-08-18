@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.7"
-    TEST_SUITE_VERSION="2.8.5"
+    PROJECT_VERSION="3.5.1"
+    TEST_SUITE_VERSION="2.9.1"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -56,8 +56,12 @@ main() {
     run_case "Create helpers size managed sources from LVM metadata" test_create_source_size_contract
     run_case "Copy helpers preserve inactive source-LV activation state" test_inactive_source_copy_contract
     run_case "Network fixture setup does not pre-run the API under test" test_network_fixture_separation_contract
+    run_case "Network fixture provisions owned rootfs storage before CT creation" test_network_fixture_owned_storage_contract
     run_case "Pause detach preflight rejects unsafe SCSI controller topology" test_pause_detach_preflight_contract
     run_case "Integration LVM-thin storages support LXC rootfs fixtures" test_lxc_rootfs_storage_contract
+    run_case "Public helpers define setup/main/end/usage first" test_lifecycle_first_contract
+    run_case "Elevation detection is silent when already elevated" test_silent_elevation_contract
+    run_case "Argument-taking functions document call syntax" test_function_call_documentation_contract
     run_case "--version for all project commands" test_all_versions
     run_case "--help for all project commands" test_all_help
     run_case "dryrun before --version for all commands" test_all_dryrun_prefix
@@ -684,16 +688,16 @@ test_create_source_size_contract() {
     return 0
 }
 
-# Real Proxmox rejected pause-mode hot-unplug of the per-disk/last SCSI
-# Ensures block-copy helpers can read an inactive template/base LV without
-# leaving it activated afterward or changing its read-only permission.
+# Ensures block-copy helpers can read an inactive template/base LV even when
+# LVM marks it activation-skip, without leaving it active afterward or
+# changing its read-only permission.
 test_inactive_source_copy_contract() {
     for tisc_name in copy-lvm.sh create-disk-copy-and-add-to-vm.sh create-disk-copy-and-overwrite-disk-on-vm.sh; do
         tisc_script="$PROJECT_ROOT/$tisc_name"
         grep -F 'SOURCE_ACTIVATED_BY_US=0' "$tisc_script" >/dev/null || return 1
         grep -F 'ensure_source_device()' "$tisc_script" >/dev/null || return 1
         grep -F 'release_source_device()' "$tisc_script" >/dev/null || return 1
-        grep -F 'lvchange -ay "${SOURCE_VG}/${SOURCE_LV}"' "$tisc_script" >/dev/null || return 1
+        grep -F 'lvchange -ay -K "${SOURCE_VG}/${SOURCE_LV}"' "$tisc_script" >/dev/null || return 1
         grep -F 'lvchange -an "${SOURCE_VG}/${SOURCE_LV}"' "$tisc_script" >/dev/null || return 1
         grep -F '[ -b "$SOURCE_PATH" ] && return 0' "$tisc_script" >/dev/null || return 1
     done
@@ -732,6 +736,24 @@ test_network_fixture_separation_contract() {
 }
 
 # controller. Ensure move/overwrite helpers refuse that topology before mutation.
+# The network group uses a real disposable LXC rootfs, so it must provision
+# and register its loopback LVM-thin storage before creating the CT fixture.
+test_network_fixture_owned_storage_contract() {
+    tnfosc_group="$TEST_ROOT/groups/90-network.sh"
+    tnfosc_main="$(awk '/^main\(\)/,/^}/' "$tnfosc_group")"
+    tnfosc_fixture="$(awk '/^prepare_network_fixture\(\)/,/^}/' "$tnfosc_group")"
+
+    printf '%s\n' "$tnfosc_main" | grep -F 'create_storage_sandbox' >/dev/null || return 1
+    printf '%s\n' "$tnfosc_main" | grep -F 'prepare_network_fixture' >/dev/null || return 1
+    tnfosc_storage_line="$(printf '%s\n' "$tnfosc_main" | grep -nF 'create_storage_sandbox' | head -n1 | cut -d: -f1)"
+    tnfosc_fixture_line="$(printf '%s\n' "$tnfosc_main" | grep -nF 'prepare_network_fixture' | head -n1 | cut -d: -f1)"
+    [ "$tnfosc_storage_line" -lt "$tnfosc_fixture_line" ] || return 1
+
+    printf '%s\n' "$tnfosc_fixture" | grep -F 'test_storage_mapping_owned "$TEST_STORAGE_A"' >/dev/null || return 1
+    printf '%s\n' "$tnfosc_fixture" | grep -F 'attach_test_ct_lv "$NET_CT" "$TEST_STORAGE_A"' >/dev/null || return 1
+    return 0
+}
+
 test_pause_detach_preflight_contract() {
     for tpdpc_name in \
         move-disk-to-vm.sh \
@@ -764,6 +786,70 @@ test_lxc_rootfs_storage_contract() {
 }
 
 # Verifies normal version output without exercising command preflight.
+test_lifecycle_first_contract() {
+    for tlfc_script in "$PROJECT_ROOT"/*.sh; do
+        tlfc_names="$(awk '/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/ {print $1}' "$tlfc_script" | sed 's/()//' | head -n4 | tr '\n' ' ')"
+        [ "$tlfc_names" = "setup main end usage " ] || {
+            printf '%s lifecycle begins with: %s\n' "$(basename "$tlfc_script")" "$tlfc_names" >&2
+            return 1
+        }
+        tlfc_setup="$(awk '/^setup\(\) \{/,/^}/' "$tlfc_script")"
+        tlfc_project_line="$(printf '%s\n' "$tlfc_setup" | grep -n 'PROJECT_VERSION=' | head -n1 | cut -d: -f1)"
+        tlfc_colour_line="$(printf '%s\n' "$tlfc_setup" | grep -n 'define_colours' | head -n1 | cut -d: -f1)"
+        [ -n "$tlfc_project_line" ] || return 1
+        [ -z "$tlfc_colour_line" ] || [ "$tlfc_project_line" -lt "$tlfc_colour_line" ] || {
+            printf '%s does not initialize defaults/state before setup helper calls.\n' "$(basename "$tlfc_script")" >&2
+            return 1
+        }
+    done
+}
+
+test_silent_elevation_contract() {
+    if grep -R -E 'Elevation:.*running[[:space:]]+as[[:space:]]+root' "$PROJECT_ROOT"/*.sh "$PROJECT_ROOT/lib" "$TEST_ROOT/lib" >/dev/null 2>&1; then
+        printf 'Routine root-success elevation output is still present.\n' >&2
+        return 1
+    fi
+    grep -F 'APP_ELEVATED="true"' "$PROJECT_ROOT/lib/common.sh" >/dev/null || return 1
+}
+
+test_function_call_documentation_contract() {
+    tfcdc_tmp="$TEST_DATA_DIR/function-call-docs.awk"
+    cat > "$tfcdc_tmp" <<'AWK'
+function finish() {
+    if (fn != "" && hasarg && !hasdoc) {
+        print file ": function " fn " accepts arguments but has no Call/Usage comment" > "/dev/stderr"
+        bad=1
+    }
+    fn=""; hasarg=0; hasdoc=0
+}
+BEGIN { fn=""; comments="" }
+/^#/ {
+    if (fn=="") comments=comments "\n" $0
+}
+/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/ {
+    finish()
+    fn=$1
+    sub(/\(\).*/,"",fn)
+    hasdoc=(comments ~ /# Call:/ || comments ~ /# Usage:/)
+    comments=""
+    if ($0 ~ /\$[1-9]/ || $0 ~ /\$[@*]/) hasarg=1
+    if ($0 ~ /}[[:space:]]*$/) finish()
+    next
+}
+fn != "" {
+    if ($0 ~ /\$[1-9]/ || $0 ~ /\$[@*]/) hasarg=1
+    if ($0 ~ /^}[[:space:]]*$/) finish()
+    next
+}
+$0 !~ /^[[:space:]]*$/ && $0 !~ /^#/ { comments="" }
+END { finish(); exit bad }
+AWK
+    for tfcdc_script in "$PROJECT_ROOT"/*.sh; do
+        sed "/__PROXMOX_LONGTAIL_EMBEDDED_/q" "$tfcdc_script" | awk -v file="$tfcdc_script" -f "$tfcdc_tmp" || return 1
+    done
+    return 0
+}
+
 test_all_versions() {
     for tav_script in "$PROJECT_ROOT"/*.sh; do
         tav_output="$(sh "$tav_script" --version)"

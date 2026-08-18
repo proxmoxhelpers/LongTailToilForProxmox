@@ -77,8 +77,8 @@ test_parse_arguments() {
 # check_elevation
 # Sets APP_ELEVATED to true or false and reports the result.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; print_success "Elevation: running as root."
-    else APP_ELEVATED="false"; print_warning "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
