@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.1"; SCRIPT_VERSION="3.0.1"
+    PROJECT_VERSION="3.2.2"; SCRIPT_VERSION="3.0.1"
     CLEANUP_ROOTS_FILE=""; UNMOUNT_FAILED=0; MAPS=""
     parse_arguments "$@"
     check_elevation

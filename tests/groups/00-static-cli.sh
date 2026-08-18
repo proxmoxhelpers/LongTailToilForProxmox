@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.1"
-    TEST_SUITE_VERSION="2.2.1"
+    PROJECT_VERSION="3.2.2"
+    TEST_SUITE_VERSION="2.2.2"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -28,6 +28,7 @@ main() {
     run_case "Every project command is standalone" test_all_standalone
     run_case "No prohibited Bash language constructs" test_no_bashisms
     run_case "No set -e unsafe short-circuit die guards" test_no_short_circuit_die
+    run_case "Overwrite helpers use UUID-safe rollback" test_overwrite_uuid_safe_rollback
     run_case "--version for all project commands" test_all_versions
     run_case "--help for all project commands" test_all_help
     run_case "dryrun before --version for all commands" test_all_dryrun_prefix
@@ -143,7 +144,7 @@ test_all_standalone() {
 
         (cd "$tas_dir" && /bin/sh "./$tas_name" --help >/dev/null)
         tas_version="$(cd "$tas_dir" && /bin/sh "./$tas_name" --version)"
-        printf '%s\n' "$tas_version" | grep -F "(project 3.2.1)" >/dev/null || return 1
+        printf '%s\n' "$tas_version" | grep -F "(project 3.2.2)" >/dev/null || return 1
     done
 }
 
@@ -201,11 +202,30 @@ test_no_short_circuit_die() {
     if [ -s "$tnsc_file" ]; then cat "$tnsc_file" >&2; return 1; fi
 }
 
+
+# Regression test: overwrite transactions must not delete unusedN during
+# rollback and must verify replacements by LV UUID after renames.
+test_overwrite_uuid_safe_rollback() {
+    tous_snapshot="$PROJECT_ROOT/create-disk-snapshot-and-overwrite-disk-on-vm.sh"
+    tous_copy="$PROJECT_ROOT/create-disk-copy-and-overwrite-disk-on-vm.sh"
+    for tous_script in "$tous_snapshot" "$tous_copy"; do
+        grep -F 'NEW_UUID=' "$tous_script" >/dev/null || return 1
+        grep -F 'lv_name_by_uuid()' "$tous_script" >/dev/null || return 1
+        grep -F 'remove_unused_reference_only()' "$tous_script" >/dev/null || return 1
+        grep -F 'ROLLBACK_FAILED' "$tous_script" >/dev/null || return 1
+        grep -F 'vsm_uuid="$(lvs --noheadings -o lv_uuid' "$tous_script" >/dev/null || return 1
+        if grep -F 'qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY"' "$tous_script" >/dev/null 2>&1; then
+            printf '%s still deletes unusedN through qm in overwrite transaction code.\n' "$tous_script" >&2
+            return 1
+        fi
+    done
+}
+
 # Verifies normal version output without exercising command preflight.
 test_all_versions() {
     for tav_script in "$PROJECT_ROOT"/*.sh; do
         tav_output="$(sh "$tav_script" --version)"
-        printf '%s\n' "$tav_output" | grep -F "(project 3.2.1)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
+        printf '%s\n' "$tav_output" | grep -F "(project 3.2.2)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
     done
 }
 

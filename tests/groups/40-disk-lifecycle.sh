@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.1"
-    TEST_SUITE_VERSION="2.2.1"
+    PROJECT_VERSION="3.2.2"
+    TEST_SUITE_VERSION="2.2.2"
     TEST_GROUP="disk-lifecycle"
     test_reset_counters
     test_parse_arguments "$@"

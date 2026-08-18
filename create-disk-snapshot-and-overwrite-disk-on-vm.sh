@@ -683,36 +683,200 @@ old_unused_key() {
     ' | head -n1
 }
 
+# lv_name_by_uuid VG UUID
+# Prints the current LV name for an exact LV UUID in one VG.
+lv_name_by_uuid() {
+    lnbu_vg="$1"; lnbu_uuid="$2"
+    lvs --noheadings -o vg_name,lv_name,lv_uuid 2>/dev/null | awk -v vg="$lnbu_vg" -v uuid="$lnbu_uuid" '
+        $1 == vg && $3 == uuid {print $2; exit}
+    '
+}
+
+# rewrite_unused_reference KEY EXPECTED_VOLID NEW_VOLID
+# Rewrites only an unusedN config reference, without invoking qm --delete and
+# therefore without triggering Proxmox storage deletion semantics.
+rewrite_unused_reference() {
+    rur_key="$1"; rur_expected="$2"; rur_new="$3"
+    rur_config="/etc/pve/qemu-server/${DEST_VM}.conf"
+    [ -f "$rur_config" ] || return 1
+
+    if dryrun_enabled; then
+        dryrun_print_shell "rewrite ${rur_key}: ${rur_expected} -> ${rur_new} in $rur_config without deleting storage"
+        return 0
+    fi
+
+    rur_tmp="$(mktemp)" || return 1
+    if ! awk -v key="$rur_key" -v expected="$rur_expected" -v replacement="$rur_new" '
+        BEGIN {prefix=key ": "; found=0; bad=0}
+        index($0,prefix)==1 {
+            rest=substr($0,length(prefix)+1)
+            comma=index(rest,",")
+            if (comma) {vol=substr(rest,1,comma-1); suffix=substr(rest,comma)}
+            else {vol=rest; suffix=""}
+            if (vol != expected) {bad=1; print; next}
+            print prefix replacement suffix
+            found=1
+            next
+        }
+        {print}
+        END {
+            if (bad) exit 42
+            if (!found) exit 43
+        }
+    ' "$rur_config" > "$rur_tmp"; then
+        rm -f "$rur_tmp"
+        return 1
+    fi
+    if ! cat "$rur_tmp" > "$rur_config"; then rm -f "$rur_tmp"; return 1; fi
+    rm -f "$rur_tmp"
+    [ "$(disk_volid "$DEST_VM" "$rur_key" 2>/dev/null || :)" = "$rur_new" ]
+}
+
+# remove_unused_reference_only KEY EXPECTED_VOLID
+# Removes only the config line. It deliberately does not use qm --delete,
+# because deleting an unusedN entry may also free its backing storage volume.
+remove_unused_reference_only() {
+    ruro_key="$1"; ruro_expected="$2"
+    ruro_config="/etc/pve/qemu-server/${DEST_VM}.conf"
+    ruro_current="$(disk_volid "$DEST_VM" "$ruro_key" 2>/dev/null || :)"
+    [ -n "$ruro_current" ] || return 0
+    [ "$ruro_current" = "$ruro_expected" ] || return 1
+
+    if dryrun_enabled; then
+        dryrun_print_shell "remove config-only ${ruro_key}: ${ruro_expected} from $ruro_config without deleting storage"
+        return 0
+    fi
+
+    ruro_tmp="$(mktemp)" || return 1
+    if ! awk -v key="$ruro_key" 'index($0,key ": ") != 1 {print}' "$ruro_config" > "$ruro_tmp"; then
+        rm -f "$ruro_tmp"
+        return 1
+    fi
+    if ! cat "$ruro_tmp" > "$ruro_config"; then rm -f "$ruro_tmp"; return 1; fi
+    rm -f "$ruro_tmp"
+    [ -z "$(disk_value "$DEST_VM" "$ruro_key" 2>/dev/null || :)" ]
+}
+
+# add_unused_reference_only KEY VOLID
+# Adds back one unusedN config reference after a failed explicit LV deletion.
+add_unused_reference_only() {
+    auro_key="$1"; auro_volid="$2"
+    auro_config="/etc/pve/qemu-server/${DEST_VM}.conf"
+    [ -z "$(disk_value "$DEST_VM" "$auro_key" 2>/dev/null || :)" ] || return 1
+
+    if dryrun_enabled; then
+        dryrun_print_shell "add config-only ${auro_key}: ${auro_volid} to $auro_config"
+        return 0
+    fi
+
+    auro_tmp="$(mktemp)" || return 1
+    cat "$auro_config" > "$auro_tmp" || { rm -f "$auro_tmp"; return 1; }
+    printf '%s: %s\n' "$auro_key" "$auro_volid" >> "$auro_tmp" || { rm -f "$auro_tmp"; return 1; }
+    if ! cat "$auro_tmp" > "$auro_config"; then rm -f "$auro_tmp"; return 1; fi
+    rm -f "$auro_tmp"
+    [ "$(disk_volid "$DEST_VM" "$auro_key" 2>/dev/null || :)" = "$auro_volid" ]
+}
+
 # rollback_old_disk
-# Attempts to restore the exact original destination slot/value after attach failure.
+# Restores the original destination disk by LV UUID. It never deletes unusedN
+# through qm, so an attempted rollback cannot free the disk it is restoring.
 rollback_old_disk() {
     [ "$OLD_DETACHED" -eq 1 ] || return 0
-    [ "$NEW_ATTACHED" -eq 0 ] || return 1
+    [ "$NEW_ATTACHED" -eq 0 ] || { ROLLBACK_FAILED=1; return 1; }
 
     warn "Attempting to restore original destination disk $DEST_OLD_VOLID at $DEST_SLOT."
 
     if [ "$REPLACEMENT_FINALIZED" -eq 1 ] && [ "$NEW_VG" = "$DEST_VG" ]; then
-        if ! dryrun_cmd lvrename "$NEW_VG" "$FINAL_LV_NAME" "$TEMP_LV_NAME"; then
-            warn "Could not move the replacement LV out of the original disk number for rollback."
+        rb_new_name="$(lv_name_by_uuid "$NEW_VG" "$NEW_UUID")"
+        if [ -z "$rb_new_name" ]; then
+            warn "Could not locate replacement LV by UUID during rollback."
+            ROLLBACK_FAILED=1
             return 1
+        fi
+        if [ "$rb_new_name" != "$TEMP_LV_NAME" ]; then
+            [ "$rb_new_name" = "$FINAL_LV_NAME" ] || {
+                warn "Replacement LV has an unexpected name during rollback: $rb_new_name"
+                ROLLBACK_FAILED=1
+                return 1
+            }
+            if ! dryrun_cmd lvrename "$NEW_VG" "$rb_new_name" "$TEMP_LV_NAME"; then
+                warn "Could not move the replacement LV out of the original disk number for rollback."
+                ROLLBACK_FAILED=1
+                return 1
+            fi
         fi
         NEW_LV_NAME="$TEMP_LV_NAME"; NEW_LV_PATH="$TEMP_LV_PATH"; NEW_VOLID="$TEMP_VOLID"; REPLACEMENT_FINALIZED=0
     fi
 
-    if [ "$OLD_ARCHIVED" -eq 1 ]; then
-        if [ -n "$OLD_UNUSED_KEY" ]; then dryrun_cmd qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY" >/dev/null 2>&1 || :; fi
-        if ! dryrun_cmd lvrename "$DEST_VG" "$ARCHIVE_LV_NAME" "$DEST_OLD_LV"; then
-            warn "Could not rename archived destination LV back to $DEST_OLD_LV."
+    rb_old_name="$(lv_name_by_uuid "$DEST_VG" "$DEST_OLD_UUID")"
+    if dryrun_enabled; then rb_old_name="${rb_old_name:-$ARCHIVE_LV_NAME}"; fi
+    if [ -z "$rb_old_name" ]; then
+        warn "Original destination LV UUID $DEST_OLD_UUID cannot be found; automatic rollback is stopping without deleting the replacement."
+        ROLLBACK_FAILED=1
+        return 1
+    fi
+
+    if [ "$rb_old_name" != "$DEST_OLD_LV" ]; then
+        if ! dryrun_cmd lvrename "$DEST_VG" "$rb_old_name" "$DEST_OLD_LV"; then
+            warn "Could not rename original destination LV $rb_old_name back to $DEST_OLD_LV."
+            ROLLBACK_FAILED=1
             return 1
         fi
-        OLD_ARCHIVED=0
+    fi
+    OLD_ARCHIVED=0
+
+    if [ -z "$OLD_UNUSED_KEY" ]; then
+        OLD_UNUSED_KEY="$(old_unused_key "$ARCHIVE_VOLID")"
+        [ -n "$OLD_UNUSED_KEY" ] || OLD_UNUSED_KEY="$(old_unused_key "$DEST_OLD_VOLID")"
+    fi
+
+    if [ -n "$OLD_UNUSED_KEY" ]; then
+        rb_unused_volid="$(disk_volid "$DEST_VM" "$OLD_UNUSED_KEY" 2>/dev/null || :)"
+        case "$rb_unused_volid" in
+            "$ARCHIVE_VOLID") ;;
+            "$DEST_OLD_VOLID")
+                if ! rewrite_unused_reference "$OLD_UNUSED_KEY" "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; then
+                    warn "Could not make the unused reference storage-neutral for rollback."
+                    ROLLBACK_FAILED=1
+                    return 1
+                fi
+                ;;
+            "")
+                OLD_UNUSED_KEY=""
+                ;;
+            *)
+                warn "$OLD_UNUSED_KEY changed unexpectedly during rollback; refusing to overwrite it."
+                ROLLBACK_FAILED=1
+                return 1
+                ;;
+        esac
     fi
 
     if ! dryrun_cmd qm set "$DEST_VM" "--${DEST_SLOT}" "$DEST_OLD_VALUE"; then
-        warn "Could not restore original destination disk automatically."
+        if [ -n "$OLD_UNUSED_KEY" ] && [ "$(disk_volid "$DEST_VM" "$OLD_UNUSED_KEY" 2>/dev/null || :)" = "$ARCHIVE_VOLID" ]; then
+            rewrite_unused_reference "$OLD_UNUSED_KEY" "$ARCHIVE_VOLID" "$DEST_OLD_VOLID" || warn "Could not restore the unused reference to $DEST_OLD_VOLID."
+        fi
+        warn "Could not restore original destination disk automatically; original LV was left intact."
+        ROLLBACK_FAILED=1
         return 1
     fi
+
+    if [ -n "$OLD_UNUSED_KEY" ] && [ "$(disk_volid "$DEST_VM" "$OLD_UNUSED_KEY" 2>/dev/null || :)" = "$ARCHIVE_VOLID" ]; then
+        if ! remove_unused_reference_only "$OLD_UNUSED_KEY" "$ARCHIVE_VOLID"; then
+            warn "Original disk was reattached, but stale $OLD_UNUSED_KEY could not be removed safely."
+            ROLLBACK_FAILED=1
+            return 1
+        fi
+    fi
+
+    [ "$(disk_volid "$DEST_VM" "$DEST_SLOT" 2>/dev/null || :)" = "$DEST_OLD_VOLID" ] || {
+        warn "Rollback attach verification failed; original LV was left intact."
+        ROLLBACK_FAILED=1
+        return 1
+    }
+
     OLD_DETACHED=0
+    ROLLBACK_FAILED=0
     return 0
 }
 
@@ -743,22 +907,35 @@ create_snapshot() {
     else run_lvm_filtered lvcreate --snapshot --name "$NEW_LV_NAME" "${SOURCE_VG}/${SOURCE_LV}"; fi
     CREATED=1
     if dryrun_enabled; then
-        NEW_REAL="$NEW_LV_PATH"; NEW_ORIGIN="$SOURCE_LV"; NEW_POOL="$SOURCE_POOL"
-        dryrun_verify "Snapshot LV would exist with expected origin and thin pool"
+        NEW_REAL="$NEW_LV_PATH"; NEW_ORIGIN="$SOURCE_LV"; NEW_POOL="$SOURCE_POOL"; NEW_UUID="dryrun-new-snapshot"
+        dryrun_verify "Snapshot LV would exist with expected origin, thin pool, and stable LV UUID"
     else
         lvs "${SOURCE_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || die "lvcreate returned successfully, but the snapshot cannot be found."
         NEW_REAL="$(lvs --noheadings -o lv_path "${SOURCE_VG}/${NEW_LV_NAME}" 2>/dev/null | trim)"
         NEW_ORIGIN="$(lvs --noheadings -o origin "${SOURCE_VG}/${NEW_LV_NAME}" 2>/dev/null | trim)"
         NEW_POOL="$(lvs --noheadings -o pool_lv "${SOURCE_VG}/${NEW_LV_NAME}" 2>/dev/null | trim)"
+        NEW_UUID="$(lvs --noheadings -o lv_uuid "${SOURCE_VG}/${NEW_LV_NAME}" 2>/dev/null | trim)"
+        [ -n "$NEW_UUID" ] || die "Could not record the new snapshot LV UUID."
     fi
     [ "$NEW_ORIGIN" = "$SOURCE_LV" ] && [ "$NEW_POOL" = "$SOURCE_POOL" ] || die "Snapshot origin/thin-pool verification failed."
 }
 
 verify_storage_mapping() {
-    if dryrun_enabled; then PVE_PATH="$NEW_LV_PATH"; dryrun_verify "Proxmox storage $STORAGE_ID would resolve $NEW_VOLID"
-    else PVE_PATH="$(pvesm path "$NEW_VOLID" 2>/dev/null || :)"; fi
+    if dryrun_enabled; then
+        PVE_PATH="$NEW_LV_PATH"
+        dryrun_verify "Proxmox storage $STORAGE_ID would resolve $NEW_VOLID to replacement LV UUID $NEW_UUID"
+        return 0
+    fi
+
+    PVE_PATH="$(pvesm path "$NEW_VOLID" 2>/dev/null || :)"
     [ -n "$PVE_PATH" ] || die "Proxmox storage could not resolve the new snapshot."
-    [ "$(readlink -f "$PVE_PATH")" = "$(readlink -f "$NEW_REAL")" ] || die "Proxmox storage mapping does not point to the new LV."
+    vsm_uuid="$(lvs --noheadings -o lv_uuid "$PVE_PATH" 2>/dev/null | trim || :)"
+    [ -n "$vsm_uuid" ] || die "Proxmox resolved $NEW_VOLID, but the resolved path is not an identifiable LVM LV."
+    [ "$vsm_uuid" = "$NEW_UUID" ] || {
+        printf 'Expected LV UUID: %s\nResolved LV UUID: %s\nResolved path:    %s\n' "$NEW_UUID" "$vsm_uuid" "$PVE_PATH" >&2
+        die "Proxmox storage mapping resolves to a different LV."
+    }
+    NEW_REAL="$PVE_PATH"
 }
 
 
@@ -768,20 +945,20 @@ verify_storage_mapping() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.1"; SCRIPT_VERSION="3.2.1"
+    PROJECT_VERSION="3.2.2"; SCRIPT_VERSION="3.2.2"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
     SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
     DEST_FORM=""; DEST_INPUT=""; DEST_VM_INPUT=""; DEST_SELECTOR=""
-    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""
+    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""; NEW_UUID=""; ROLLBACK_FAILED=0
     parse_arguments "$@"
     check_elevation
 }
 
 main() {
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs lvcreate lvrename lvremove qm pvesm blockdev readlink awk grep sed sort tail find
+    need_commands lvs lvcreate lvrename lvremove qm pvesm blockdev readlink awk grep sed sort tail find mktemp cat
     ro_saved_mode="$MODE"; MODE="hot"; resolve_source; MODE="$ro_saved_mode"
     [ -n "$SOURCE_POOL" ] || { printf 'Source: %s\nLV attributes: %s\n' "$SOURCE_PATH" "$SOURCE_ATTR"; die "Source is not an LVM-thin volume."; }
     resolve_destination
@@ -988,15 +1165,15 @@ replace_destination_disk() {
     else run_lvm_filtered lvrename "$DEST_VG" "$DEST_OLD_LV" "$ARCHIVE_LV_NAME"; fi
     OLD_ARCHIVED=1
 
-    info "Updating $OLD_UNUSED_KEY to the archived volume name..."
-    if ! dryrun_cmd qm set "$DEST_VM" "--${OLD_UNUSED_KEY}" "$ARCHIVE_VOLID"; then
+    info "Updating $OLD_UNUSED_KEY to the archived volume name without invoking storage deletion..."
+    if ! rewrite_unused_reference "$OLD_UNUSED_KEY" "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; then
         rollback_old_disk || :
-        die "Could not update $OLD_UNUSED_KEY to $ARCHIVE_VOLID."
+        die "Could not update $OLD_UNUSED_KEY to $ARCHIVE_VOLID safely."
     fi
 
     if ! dryrun_enabled; then
         [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || { rollback_old_disk || :; die "Archived disk is not preserved as unusedN."; }
-        lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1 || { rollback_old_disk || :; die "Archived LV cannot be found."; }
+        [ "$(lv_name_by_uuid "$DEST_VG" "$DEST_OLD_UUID")" = "$ARCHIVE_LV_NAME" ] || { rollback_old_disk || :; die "Archived destination LV UUID is not at the expected archive name."; }
     else
         dryrun_verify "$DEST_OLD_VOLID would be preserved as $ARCHIVE_VOLID at $OLD_UNUSED_KEY"
     fi
@@ -1006,6 +1183,10 @@ replace_destination_disk() {
     else run_lvm_filtered lvrename "$NEW_VG" "$TEMP_LV_NAME" "$FINAL_LV_NAME"; fi
     REPLACEMENT_FINALIZED=1
     NEW_LV_NAME="$FINAL_LV_NAME"; NEW_LV_PATH="$FINAL_LV_PATH"; NEW_VOLID="$FINAL_VOLID"
+    if ! dryrun_enabled; then
+        rdd_final_uuid="$(lvs --noheadings -o lv_uuid "${NEW_VG}/${FINAL_LV_NAME}" 2>/dev/null | trim || :)"
+        [ "$rdd_final_uuid" = "$NEW_UUID" ] || { rollback_old_disk || :; die "Replacement LV UUID changed or final rename did not land on the intended LV."; }
+    fi
 
     verify_storage_mapping
 
@@ -1023,7 +1204,7 @@ delete_archived_disk() {
     info "Deleting displaced archived disk $ARCHIVE_VOLID..."
 
     if dryrun_enabled; then
-        dryrun_cmd qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY"
+        remove_unused_reference_only "$OLD_UNUSED_KEY" "$ARCHIVE_VOLID"
         dryrun_cmd lvremove -y "$ARCHIVE_LV_PATH"
         dryrun_verify "$ARCHIVE_VOLID would be permanently deleted after the replacement is verified"
         OLD_ARCHIVED=0
@@ -1032,13 +1213,24 @@ delete_archived_disk() {
     fi
 
     [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Refusing delete: archived disk is no longer the expected unused volume."
-    qm set "$DEST_VM" --delete "$OLD_UNUSED_KEY"
+    [ "$(lv_name_by_uuid "$DEST_VG" "$DEST_OLD_UUID")" = "$ARCHIVE_LV_NAME" ] || die "Refusing delete: archived LV UUID no longer matches the displaced destination disk."
+
+    if ! remove_unused_reference_only "$OLD_UNUSED_KEY" "$ARCHIVE_VOLID"; then
+        die "Could not remove the archived unusedN config reference safely."
+    fi
+
     if ! run_lvm_filtered lvremove -y "$ARCHIVE_LV_PATH"; then
-        warn "Could not delete archived LV; restoring $OLD_UNUSED_KEY."
-        qm set "$DEST_VM" "--${OLD_UNUSED_KEY}" "$ARCHIVE_VOLID" >/dev/null 2>&1 || warn "Could not restore unused reference automatically."
+        warn "Could not delete archived LV; restoring its unusedN config reference."
+        add_unused_reference_only "$OLD_UNUSED_KEY" "$ARCHIVE_VOLID" || warn "Could not restore $OLD_UNUSED_KEY automatically."
         die "Failed to delete $ARCHIVE_VOLID."
     fi
-    if lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1; then die "lvremove returned successfully, but archived LV still exists."; fi
+
+    if [ -n "$(lv_name_by_uuid "$DEST_VG" "$DEST_OLD_UUID")" ]; then
+        warn "lvremove returned successfully, but the displaced LV UUID still exists; restoring an unused reference if possible."
+        add_unused_reference_only "$OLD_UNUSED_KEY" "$ARCHIVE_VOLID" || :
+        die "Archived destination LV still exists after deletion."
+    fi
+
     OLD_ARCHIVED=0
     OLD_DELETED=1
 }
@@ -1082,7 +1274,9 @@ cleanup_on_exit() {
     trap - 0 HUP INT TERM
     set +e
 
-    if [ "$NEW_ATTACHED" -eq 0 ] && [ "$OLD_DETACHED" -eq 1 ]; then rollback_old_disk || :; fi
+    if [ "$NEW_ATTACHED" -eq 0 ] && [ "$OLD_DETACHED" -eq 1 ] && [ "$ROLLBACK_FAILED" -eq 0 ]; then
+        rollback_old_disk || :
+    fi
 
     if [ "$MODE" = "pause" ] && [ "$PAUSED_BY_US" -eq 1 ] && [ -n "$DEST_VM" ]; then
         if dryrun_enabled; then dryrun_cmd qm resume "$DEST_VM"; else qm resume "$DEST_VM" >/dev/null 2>&1; fi
@@ -1092,11 +1286,13 @@ cleanup_on_exit() {
         STOPPED_BY_US=0
     fi
 
-    if ! dryrun_enabled && [ "$CREATED" -eq 1 ] && [ "$NEW_ATTACHED" -eq 0 ] && [ "$COMPLETE" -eq 0 ]; then
+    if ! dryrun_enabled && [ "$CREATED" -eq 1 ] && [ "$NEW_ATTACHED" -eq 0 ] && [ "$COMPLETE" -eq 0 ] && [ "$ROLLBACK_FAILED" -eq 0 ]; then
         if ! guest_volume_references | grep -F "|$NEW_VOLID" >/dev/null 2>&1; then
             warn "Removing unattached replacement snapshot: $NEW_LV_PATH"
             lvremove -y "${NEW_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || warn "Could not remove $NEW_LV_PATH automatically."
         fi
+    elif ! dryrun_enabled && [ "$ROLLBACK_FAILED" -eq 1 ]; then
+        warn "Rollback was incomplete. No remaining replacement LV will be auto-deleted; inspect LV UUIDs and VM config before making further changes."
     fi
 
     set -e

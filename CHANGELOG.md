@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.2.2 — 2026-08-17
+
+Overwrite transaction safety fix.
+
+- Fixed a false storage-mapping failure after the staged replacement LV was renamed to the destination disk number.
+- Replacement identity is now verified by LV UUID instead of a stale pre-rename device path.
+- Rollback locates the displaced original LV by its saved UUID.
+- Rollback no longer calls `qm --delete unusedN`, which can free the backing unused volume.
+- Unused-disk reference rewrites/removals are config-only operations; explicit LV deletion happens only for the `delete` path after successful replacement.
+- If rollback cannot prove a safe restoration, automatic replacement cleanup is disabled so remaining recovery material is preserved.
+
 ## 3.2.1 — 2026-08-17
 
 Corrected overwrite semantics for both disk-overwrite helpers.

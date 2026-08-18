@@ -550,7 +550,7 @@ The v3.0.1 POSIX implementation was exercised by the repository's disposable int
 
 The validated run covered all 36 command cases, including real `qm`, `pvesm`, LVM/device-mapper, mount/umount, `qemu-img`, storage move/import/export, snapshot, rename, delete, recovery and VMID-change operations. Dry-run before/after snapshots remained unchanged, and protected guest/LVM/storage state returned to baseline with no detected anomalies.
 
-Version 3.2.1 corrects overwrite semantics: the replacement now inherits the destination's original backing `disk-N`, while the displaced disk is moved to the first free `disk-901+`; adding `delete` permanently removes that archived old disk only after the replacement succeeds. The integration matrix covers all 40 commands.
+Version 3.2.2 keeps those overwrite semantics and fixes the rollback/identity path exposed by real Proxmox testing: replacement identity is verified by LV UUID across renames, rollback restores the displaced LV by UUID, and rollback never deletes an `unusedN` entry through `qm`. The integration matrix covers all 40 commands.
 
 Run the same suite on your own host:
 
@@ -593,6 +593,8 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
+- [v3.2.2 overwrite rollback/identity fix](docs/V3.2.2-OVERWRITE-ROLLBACK-FIX.md)
+- [v3.2.2 static validation](docs/V3.2.2-STATIC-VALIDATION.md)
 - [v3.2.1 overwrite disk-number fix](docs/V3.2.1-OVERWRITE-DISK-NUMBER-FIX.md)
 - [v3.2.1 static validation](docs/V3.2.1-STATIC-VALIDATION.md)
 - [v3.2.0 disk create/overwrite helpers](docs/V3.2.0-DISK-CREATE-OVERWRITE.md)

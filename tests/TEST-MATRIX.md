@@ -1,4 +1,4 @@
-# Test Coverage Matrix — v3.2.1
+# Test Coverage Matrix — v3.2.2
 
 Every executable project command is covered by at least one group.
 

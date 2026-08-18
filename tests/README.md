@@ -1,13 +1,19 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.2.1**  
-Project target: **3.2.1**
+Test suite version: **2.2.2**  
+Project target: **3.2.2**
 
 This suite exercises all 40 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.2.2 — v3.2.2 overwrite rollback/identity fix
+
+The overwrite helpers now verify replacement volumes by LV UUID across renames, never use `qm --delete unusedN` during rollback, restore the displaced disk by its saved LV UUID, and refuse automatic cleanup of the replacement if rollback cannot prove a safe restoration.
+
+The static suite rejects regression to the unsafe rollback pattern. The real copy/snapshot group remains the acceptance test for the complete transaction.
 
 ## v2.2.1 — v3.2.1 overwrite disk-number semantics
 
