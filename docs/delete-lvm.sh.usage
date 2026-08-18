@@ -1,0 +1,15 @@
+delete-lvm.sh 3.0.1 (project 3.4.7)
+
+USAGE
+  delete-lvm.sh <lvm-volume-path> [dryrun]
+
+EXAMPLE
+  delete-lvm.sh /dev/thinvg/vm-123-disk-1-copy
+
+LIST VOLUMES
+  lvs --noheadings -o lv_path | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+
+Dry-run:
+  Add dryrun or --dryrun anywhere on the command line.
+  Read-only preflight checks still run, but modifying commands are printed
+  instead of executed and mutation-dependent verification is simulated.

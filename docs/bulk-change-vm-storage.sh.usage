@@ -1,0 +1,5 @@
+Usage: bulk-change-vm-storage.sh <source-storage> <destination-storage> <vmid>... [dryrun]
+Dry-run:
+  Add dryrun or --dryrun anywhere on the command line.
+  Read-only preflight checks still run, but modifying commands are printed
+  instead of executed and mutation-dependent verification is simulated.

@@ -73,6 +73,18 @@ How to investigate integration results:
 
 Use this after a test run produces a failure or unexpected warning.
 
+### [Proxmox Test Harness Best Practices](PROXMOX-TEST-HARNESS-BEST-PRACTICES.md)
+
+Practical Proxmox-specific guidance for disposable storage, QEMU/LXC fixtures, controller topology, ownership proof, byte verification and fail-closed cleanup.
+
+### [POSIX Shell Test Harness Best Practices](POSIX-SHELL-TEST-HARNESS-BEST-PRACTICES.md)
+
+Shell-control-flow and harness-engineering guidance covering `set -e`, return-code contracts, logging, explicit prerequisites, help/usage testing and cleanup self-tests.
+
+### [Destructive System-Test Safety Checklist](DESTRUCTIVE-SYSTEM-TEST-SAFETY-CHECKLIST.md)
+
+A concise pre-run, fixture, per-case, cleanup and release-gate checklist for any integration suite that creates, renames, mounts or deletes system resources.
+
 ## v3.4.2 harness hardening
 
 The current integration harness adds several fail-closed protections beyond the original design:
@@ -115,6 +127,10 @@ protected pre-existing state returned to baseline.
 ```
 
 These guides preserve the reasoning behind the mechanisms that made that result trustworthy.
+
+## Related lessons learned
+
+The project-wide [Proxmox and Shell Scripting Lessons Learned](../PROXMOX-SHELL-SCRIPTING-LESSONS-LEARNED.md) document records the real defects and platform surprises that motivated many of these testing practices.
 
 ## Relationship to the v3 style guide
 
