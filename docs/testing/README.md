@@ -30,8 +30,9 @@ Proxmox-specific fixture architecture:
 - sparse files and loop devices;
 - disposable PV/VG/thin-pool stacks;
 - temporary `lvmthin` storage IDs;
-- dynamically allocated high VMIDs;
-- stopped synthetic VMs;
+- dynamically allocated high VMIDs/CTIDs;
+- disposable QEMU VMs and config-only LXC fixtures;
+- guests stopped by default, with brief runtime transitions only in explicit state-mode tests;
 - mount/import/export fixtures;
 - Proxmox storage canonicalization;
 - layered verification;
@@ -71,6 +72,20 @@ How to investigate integration results:
 - state release validation precisely.
 
 Use this after a test run produces a failure or unexpected warning.
+
+## v3.4.2 harness hardening
+
+The current integration harness adds several fail-closed protections beyond the original design:
+
+- every mutating public helper must have an integration dry-run whose before/after disposable-state snapshots are identical;
+- dry-run/refusal snapshots include LV metadata, sampled LV bytes, guest config and runtime state, temporary storage definitions, files and test-directory mounts;
+- protected pre-existing baselines include local QEMU/LXC runtime status and firewall-file checksums in addition to VG/PV/LV, guest-config and storage semantics;
+- cleanup verifies exact test VM/CT identity and all storage-backed references before purge;
+- cleanup stops by layer when mounts, guests, storage definitions, VGs or loop ownership cannot be proven safe;
+- pre-existing backup paths are recorded and never removed by test cleanup;
+- a loopback-owned regular VG exercises full-write copy behavior separately from LVM-thin sparse-copy behavior.
+
+The 42-command v3.4.2 suite contains 84 real integration cases. That is a test definition, not a validation claim: it still requires a fresh real-Proxmox run with zero failures and zero protected-state anomalies before the release is called integration-validated.
 
 ## Lessons that motivated these guides
 
