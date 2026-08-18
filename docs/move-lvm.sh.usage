@@ -1,4 +1,4 @@
-move-lvm.sh 3.4.7 (project 3.4.7)
+move-lvm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   move-lvm.sh <source-lv-path> <destination-lv-path> [dryrun]

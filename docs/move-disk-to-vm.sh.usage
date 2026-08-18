@@ -1,4 +1,4 @@
-move-disk-to-vm.sh 3.4.4 (project 3.4.7)
+move-disk-to-vm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   move-disk-to-vm.sh <full-lv-path> <destination-vmid> [pause|stop|restart] [dryrun]

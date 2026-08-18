@@ -1,4 +1,4 @@
-rename-lvm.sh 3.0.1 (project 3.4.7)
+rename-lvm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   rename-lvm.sh <source-lv-path> <new-name> [dryrun]

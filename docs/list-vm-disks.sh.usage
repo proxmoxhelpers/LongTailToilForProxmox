@@ -1,4 +1,4 @@
-list-vm-disks.sh 3.0.0 (project 3.4.7)
+list-vm-disks.sh 3.5.1 (project 3.5.1)
 
 USAGE
   list-vm-disks.sh <vmid> [dryrun]

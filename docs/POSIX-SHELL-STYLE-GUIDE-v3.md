@@ -53,47 +53,57 @@ Multiline form is appropriate for here-documents, substantial `case`/`if`/loop b
 
 ## 3. Standard file scaffold
 
-Every executable script follows this high-level structure:
+Every public executable should make the lifecycle visible immediately. Except for the shebang, `set -eu`, and banner/documentation comments, `setup()` should be the first function whenever practical.
+
+Preferred structure:
 
 ```sh
 #!/bin/sh
 set -eu
 
 ############################################################
-# SETUP / MAIN / END
+# LIFECYCLE
 ############################################################
 
+# setup [ARGS...]
+# Call: setup "$@"
 setup() {
-    define_colours
-    # Configuration
+    # User-modifiable defaults / command defaults first.
+    MODE="hot"
+    TARGET_BUS="scsi"
+
+    # Version and script state.
     PROJECT_VERSION="3.x.x"
     SCRIPT_VERSION="..."
-    # Setup
+
+    define_colours
     parse_arguments "$@"
+    check_elevation
 }
 
+# main [ARGS...]
+# Call: main "$@"
 main() {
-    high_level_operation
+    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
+    validate_environment
+    perform_operation
+    verify_result
 }
 
+# end
+# Call: end
 end() {
     print_success "Completed."
 }
 
-############################################################
-# COMMAND LINE
-############################################################
-
-...
-
-############################################################
-# HIGH LEVEL TASKS
-############################################################
-
-...
+# usage
+# Call: usage
+usage() {
+    ...
+}
 
 ############################################################
-# GENERAL HELPERS
+# IMPLEMENTATION HELPERS
 ############################################################
 
 ...
@@ -107,18 +117,31 @@ main "$@"
 end
 ```
 
-Operational logic should live in functions. Top-level code should be limited to safe constants required before functions, script-directory/library setup when necessary, and the final lifecycle calls.
+`usage()` should preferably be the function immediately after `end()`.
+
+Do not put implementation helper functions before the lifecycle merely because `setup()` calls them. POSIX shell parses all function definitions before the final lifecycle invocation, so helpers may be defined later.
+
+Top-level executable code should be limited to the final lifecycle calls. A rare, justified exception is a safe interpreter directive such as:
+
+```sh
+set -eu
+```
+
+or a truly necessary constant/documentation banner that must exist before function definitions.
 
 ## 4. Meaning of setup, main, and end
 
-`setup()` performs one-time preparation: colours, versions/defaults, argument parsing, environment detection, and elevation detection when required. It must not perform privileged mutations before the elevation gate.
+`setup()` performs one-time preparation: defaults, versions/state initialization, colours, argument parsing, environment detection, and elevation detection when required.
+
+User-modifiable defaults and command defaults belong at the **top of `setup()`**, before helper calls. This makes the operator-adjustable behavior visible without searching through implementation code.
+
+`setup()` must not perform privileged mutations before the elevation gate.
 
 `main()` expresses the operation in high-level steps. Someone reading only `main()` should understand the procedure:
 
 ```sh
 main() {
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    install_dependencies
     validate_environment
     validate_source
     validate_destination
@@ -132,7 +155,18 @@ main() {
 }
 ```
 
-`end()` performs normal completion work: summaries, success messages, result paths, and follow-up reminders. Do not use it as a second `main()`.
+`end()` performs normal completion work: summaries, result paths, cleanup and follow-up reminders. Do not use it as a second `main()`.
+
+The lifecycle order near the top of the file is:
+
+```text
+setup
+main
+end
+usage
+```
+
+unless a specific script has a strong reason to deviate.
 
 ## 5. Privilege detection and self-elevation
 
@@ -147,62 +181,37 @@ Its values are exactly `true` or `false`.
 For root-requiring scripts:
 
 1. `setup()` calls `check_elevation`.
-2. `check_elevation` sets and exports `APP_ELEVATED`.
-3. The elevation state is printed.
-4. `main()` checks `APP_ELEVATED` before privileged work.
-5. If necessary, the script re-executes itself through `sudo`.
-6. Original CLI arguments are preserved with `"$@"`.
+2. `check_elevation` silently sets and exports `APP_ELEVATED`.
+3. `main()` checks `APP_ELEVATED` before privileged work.
+4. If elevation is required and missing, the script reports that fact and re-executes itself through `sudo` when appropriate.
+5. Original CLI arguments are preserved with `"$@"`.
+
+Do **not** print routine success chatter such as:
+
+```text
+[OK] Elevation: running as root.
+```
+
+Being already elevated is not an event that needs reporting. Mention elevation only when the script is not elevated and the requested operation requires elevation.
 
 Reference:
 
 ```sh
-############################################################
 # check_elevation
-#
-# Description:
-#   Detects whether the script is currently running as root.
-#
-# Usage:
-#   check_elevation
-#
-# Arguments:
-#   None.
-#
-# Output:
-#   Sets and exports APP_ELEVATED to true or false.
-#   Prints the detected elevation state.
-#
-# Returns:
-#   0 always.
-############################################################
+# Call: check_elevation
+# Sets APP_ELEVATED silently.
 check_elevation() {
-    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"; print_success "Elevation: running as root."
-    else APP_ELEVATED="false"; print_warning "Elevation: not running as root."; fi
+    if [ "$(id -u)" -eq 0 ]; then APP_ELEVATED="true"
+    else APP_ELEVATED="false"; fi
     export APP_ELEVATED
 }
 
-############################################################
-# self_elevate
-#
-# Description:
-#   Re-executes the current script as root while preserving all
-#   original command-line arguments.
-#
-# Usage:
-#   self_elevate "$@"
-#
-# Arguments:
-#   $@  Original script command-line arguments.
-#
-# Output:
-#   Replaces the current process with an elevated copy.
-#
-# Returns:
-#   Does not return on success.
-############################################################
+# self_elevate ARGS...
+# Call: self_elevate "$@"
+# Re-executes the script with root privileges when required.
 self_elevate() {
     command -v sudo >/dev/null 2>&1 || die "Root privileges are required and sudo is unavailable."
-    print_warning "Re-running with root privileges..."
+    warn "Root privileges are required; re-running with sudo..."
     exec sudo -- /bin/sh "$0" "$@"
 }
 ```
@@ -231,7 +240,7 @@ For options, use `case`. Do not use `eval` for parsing.
 
 ## 7. Usage text
 
-Every script has `usage()` and should include, where applicable:
+Every public script has `usage()` and should include, where applicable:
 
 ```text
 NAME / VERSION
@@ -243,7 +252,13 @@ EXAMPLES
 NOTES
 ```
 
+`usage()` should preferably appear immediately after `end()` near the top of the script.
+
+`--help` must work without root and without requiring the target VM/storage/LV to exist.
+
 Usage errors exit `2`; runtime failures normally exit `1`.
+
+When the repository ships a `.usage` snapshot, it should be generated from live `--help` output and tested byte-for-byte so documentation cannot drift.
 
 ## 8. Section organization
 
@@ -255,13 +270,18 @@ Use banners such as:
 ############################################################
 ```
 
-Typical order:
+Preferred order:
 
 ```text
-SETUP / MAIN / END
-COMMAND LINE
-PRIVILEGE
-DEPENDENCIES
+LIFECYCLE
+  setup
+  main
+  end
+  usage
+
+EMBEDDED / SHARED RUNTIME
+COMMAND LINE PARSING HELPERS
+PRIVILEGE / DEPENDENCIES
 VALIDATION / PRE-FLIGHT
 HIGH LEVEL TASKS
 DOMAIN-SPECIFIC OPERATIONS
@@ -271,11 +291,15 @@ GENERAL HELPERS
 START
 ```
 
+The lifecycle is intentionally above implementation helpers. Do not move it down merely to satisfy declaration-before-use habits from other languages.
+
 Do not create empty sections.
 
 ## 9. Function documentation
 
-Every non-trivial function gets a documentation block immediately before it:
+Every non-trivial function gets a documentation block immediately before it.
+
+A function that accepts call arguments must include its call syntax in that block. Either the full form:
 
 ```sh
 ############################################################
@@ -303,7 +327,23 @@ resolve_volume_path() (
 )
 ```
 
-Required fields are Description, Usage, Arguments, Output, and Returns. Sanctioned relaxed forms are defined in the companion style-profiles document.
+or a sanctioned compact form:
+
+```sh
+# resolve_volume_path STORAGE_VOLUME
+# Call: resolve_volume_path STORAGE_VOLUME
+# Prints the resolved path or returns non-zero.
+resolve_volume_path() (
+    rvp_volume="$1"
+    pvesm path "$rvp_volume" 2>/dev/null
+)
+```
+
+is acceptable.
+
+Do not make a reader reverse-engineer `$1`, `$2`, or `"$@"` to learn how an internal helper is called.
+
+Required fields for the full form are Description, Usage, Arguments, Output, and Returns. Sanctioned relaxed forms are defined in the companion style-profiles document.
 
 ## 10. Function spacing
 
@@ -315,9 +355,89 @@ Use lower snake case and verb-first names. Predicates normally begin `is_`, `has
 
 ## 12. Variable naming
 
-Persistent state uses uppercase snake case. Framework state uses `APP_`.
+Script-wide persistent state uses uppercase snake case. Framework state uses `APP_`.
 
-POSIX shell has no standard `local`. Prefer subshell functions where private scope helps. Function-private variables use a short function-derived prefix. Caller-visible output variables are uppercase and documented.
+POSIX shell has no standard `local`. Function scratch variables therefore use a **function-derived lowercase prefix** so accidental global leakage is recognizable and collisions are unlikely.
+
+The prefix may be the full function name or a consistent abbreviation/initialism:
+
+```sh
+require_qemu_vm() {
+    rqv_id="$1"
+}
+
+set_destination_boot_first() {
+    sdbf_vm="$1"
+    sdbf_slot="$2"
+}
+```
+
+Do not mix unrelated prefixes inside one function.
+
+### Function-persistent state
+
+A variable deliberately intended to retain function-specific state after the function returns, until the next call to that function, uses a leading underscore before the function prefix:
+
+```text
+_fn_cached_value
+_RQV_CachedValue
+```
+
+Capitalization is optional, but naming must be consistent within the function's scope.
+
+Do not use the underscore convention merely because POSIX shell happens to leak ordinary scratch variables globally. Scratch variables are still considered private and must not be consumed after return.
+
+### Pseudoarrays and pseudoobjects
+
+POSIX shell does not support array syntax and does not permit literal variable names containing `[` `]` or `.`. Therefore notation such as:
+
+```text
+fn_myarray[X]
+fn_myarray.lbound
+fn_myarray.ubound
+fn_myarray.count
+fn_myobject.property
+```
+
+is a **conceptual naming model**, not literal POSIX assignment syntax.
+
+When a pseudoarray is genuinely needed, its documented model uses:
+
+```text
+fn_myarray[X]       element X
+fn_myarray.lbound   lower bound, implicitly 0 unless stated otherwise
+fn_myarray.ubound   highest valid index
+fn_myarray.count    element count
+```
+
+When a pseudoobject is useful, document fields as:
+
+```text
+fn_myobject.property
+```
+
+In executable POSIX shell, prefer representations that preserve the same structure safely:
+
+```text
+newline-delimited files
+pipe-delimited records
+function-prefixed scalar variables
+subshell output
+```
+
+For example, a conceptual:
+
+```text
+plan[0].old
+plan[0].new
+plan.count
+```
+
+may be stored as one record per line in a temporary plan file rather than encoded into dynamically named shell variables.
+
+Where the implementation language actually provides real arrays or objects, prefer those language-native types over pseudoarrays/pseudoobjects. For this project's POSIX `/bin/sh` helpers, there are no standard language-native arrays.
+
+Caller-visible output variables remain uppercase and must be documented.
 
 ## 13. Subshell functions as local scope
 
@@ -978,6 +1098,13 @@ A script is not ready for v3 until all applicable items pass:
 - [ ] Direct config edits never bypass a failed live-device transition.
 - [ ] External utility option combinations have real target-host coverage when safety-relevant.
 - [ ] `--help` works before root/environment preflight and returns 0 with a Usage section.
+- [ ] `setup()`, `main()`, `end()`, then `usage()` appear at the top unless a documented exception applies.
+- [ ] User-modifiable/default values are initialized at the top of `setup()`.
+- [ ] Routine root success output is suppressed; elevation is reported only when required and missing.
+- [ ] Every argument-taking function documents its call syntax.
+- [ ] Function scratch variables use one function-derived prefix consistently.
+- [ ] Function-persistent private state uses a leading underscore before the function prefix.
+- [ ] POSIX pseudoarray/pseudoobject notation is conceptual only; executable storage uses POSIX-safe representations.
 - [ ] Any shipped usage snapshot matches live `--help`.
 - [ ] Test/cleanup code uses only explicitly available helpers and fail-closed ownership checks.
 

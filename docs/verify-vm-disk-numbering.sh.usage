@@ -1,4 +1,4 @@
-verify-vm-disk-numbering.sh 1.1.0 (project 3.4.7)
+verify-vm-disk-numbering.sh 3.5.1 (project 3.5.1)
 
 USAGE
   verify-vm-disk-numbering.sh [dryrun]

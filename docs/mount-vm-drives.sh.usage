@@ -1,4 +1,4 @@
-mount-vm-drives.sh 3.0.0 (project 3.4.7)
+mount-vm-drives.sh 3.5.1 (project 3.5.1)
 
 USAGE
   mount-vm-drives.sh <lvm-volume-path> [mount-root] [--ro|--rw] [dryrun]

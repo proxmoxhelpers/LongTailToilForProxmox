@@ -17,7 +17,7 @@ Run the built-in help without performing the operation:
 The current built-in help is:
 
 ```text
-unmount-vm-drives.sh 3.0.1 (project 3.4.7)
+unmount-vm-drives.sh 3.5.1 (project 3.5.1)
 
 USAGE
   unmount-vm-drives.sh <lvm-volume-path> [dryrun]
@@ -55,7 +55,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-unmount-vm-drives.sh 3.0.1 (project 3.4.7)
+unmount-vm-drives.sh 3.5.1 (project 3.5.1)
 ```
 
-This page documents the helper as shipped in project **v3.4.7**.
+This page documents the helper as shipped in project **v3.5.1**.
