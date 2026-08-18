@@ -1,4 +1,4 @@
-create-disk-snapshot-and-overwrite-disk-on-vm.sh 3.4.4 (project 3.4.7)
+create-disk-snapshot-and-overwrite-disk-on-vm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]

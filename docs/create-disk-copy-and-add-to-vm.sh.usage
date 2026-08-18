@@ -1,4 +1,4 @@
-create-disk-copy-and-add-to-vm.sh 3.4.7 (project 3.4.7)
+create-disk-copy-and-add-to-vm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   create-disk-copy-and-add-to-vm.sh <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]

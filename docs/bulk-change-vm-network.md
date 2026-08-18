@@ -73,7 +73,7 @@ NO_COLOR=1 ./some-command.sh ...
 ## Version
 
 ```text
-bulk-change-vm-network.sh 3.0.0 (project 3.4.7)
+bulk-change-vm-network.sh 3.5.1 (project 3.5.1)
 ```
 
-This page documents the helper as shipped in project **v3.4.7**.
+This page documents the helper as shipped in project **v3.5.1**.

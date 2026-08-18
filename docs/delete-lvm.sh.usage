@@ -1,4 +1,4 @@
-delete-lvm.sh 3.0.1 (project 3.4.7)
+delete-lvm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   delete-lvm.sh <lvm-volume-path> [dryrun]

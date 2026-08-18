@@ -1,4 +1,4 @@
-copy-lvm.sh 3.4.7 (project 3.4.7)
+copy-lvm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   copy-lvm.sh <source-lv-path> <destination-lv-path> [dryrun]

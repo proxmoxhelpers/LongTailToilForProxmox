@@ -1,4 +1,4 @@
-change-vmid-of-vm.sh 3.4.1 (project 3.4.7)
+change-vmid-of-vm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   change-vmid-of-vm.sh <old-vmid> <new-vmid> [dryrun]

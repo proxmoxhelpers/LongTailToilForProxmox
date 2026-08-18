@@ -1,4 +1,4 @@
-create-disk-snapshot-and-add-to-vm.sh 3.4.4 (project 3.4.7)
+create-disk-snapshot-and-add-to-vm.sh 3.5.1 (project 3.5.1)
 
 USAGE
   create-disk-snapshot-and-add-to-vm.sh <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [hot|pause|stop|restart] [boot] [dryrun]
