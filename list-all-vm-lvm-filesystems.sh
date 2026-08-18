@@ -390,7 +390,7 @@ dryrun_summary() {
 setup() {
     define_colours
     define_format_colours
-    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="1.1.0"
+    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="1.1.0"
     ALL_LVS_FILE=""; REFS_FILE=""; PARTS_FILE=""
     parse_arguments "$@"
 }

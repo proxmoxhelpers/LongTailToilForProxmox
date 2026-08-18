@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"
-    TEST_SUITE_VERSION="2.8.1"
+    PROJECT_VERSION="3.4.4"
+    TEST_SUITE_VERSION="2.8.2"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -52,6 +52,9 @@ main() {
     run_case "delete-lvm cancellation returns failure" test_delete_cancel_contract
     run_case "Disk-bus changes sanitize incompatible iothread" test_bus_iothread_contract
     run_case "Emergency cleanup compares protected state" test_emergency_compare_contract
+    run_case "Create helpers size managed sources from LVM metadata" test_create_source_size_contract
+    run_case "Pause detach preflight rejects unsafe SCSI controller topology" test_pause_detach_preflight_contract
+    run_case "Integration LVM-thin storages support LXC rootfs fixtures" test_lxc_rootfs_storage_contract
     run_case "--version for all project commands" test_all_versions
     run_case "--help for all project commands" test_all_help
     run_case "dryrun before --version for all commands" test_all_dryrun_prefix
@@ -610,6 +613,55 @@ test_emergency_compare_contract() {
     tecc_body="$(sed -n '/^test_emergency_cleanup()/,/^}/p' "$tecc_lib")"
     printf '%s\n' "$tecc_body" | grep -F 'test_cleanup_sandbox' >/dev/null || return 1
     printf '%s\n' "$tecc_body" | grep -F 'compare_protected_state' >/dev/null || return 1
+}
+
+# Template/base LVs can be valid managed LVs even when blockdev size probing is
+# unsuitable. All four create helpers must use LVM metadata for source size.
+test_create_source_size_contract() {
+    for tcssc_name in \
+        create-disk-copy-and-add-to-vm.sh \
+        create-disk-snapshot-and-add-to-vm.sh \
+        create-disk-copy-and-overwrite-disk-on-vm.sh \
+        create-disk-snapshot-and-overwrite-disk-on-vm.sh; do
+        tcssc_script="$PROJECT_ROOT/$tcssc_name"
+        grep -F 'lvs --noheadings --units b --nosuffix -o lv_size "$SOURCE_PATH"' "$tcssc_script" >/dev/null || {
+            printf '%s does not size source LVs from LVM metadata.\n' "$tcssc_name" >&2
+            return 1
+        }
+        if grep -F 'SOURCE_SIZE_BYTES="$(blockdev --getsize64 "$SOURCE_PATH"' "$tcssc_script" >/dev/null 2>&1; then
+            printf '%s still uses blockdev for managed source LV sizing.\n' "$tcssc_name" >&2
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Real Proxmox rejected pause-mode hot-unplug of the per-disk/last SCSI
+# controller. Ensure move/overwrite helpers refuse that topology before mutation.
+test_pause_detach_preflight_contract() {
+    for tpdpc_name in \
+        move-disk-to-vm.sh \
+        create-disk-copy-and-overwrite-disk-on-vm.sh \
+        create-disk-snapshot-and-overwrite-disk-on-vm.sh; do
+        tpdpc_script="$PROJECT_ROOT/$tpdpc_name"
+        grep -F 'validate_pause_detach_capability()' "$tpdpc_script" >/dev/null || return 1
+        grep -F 'virtio-scsi-single' "$tpdpc_script" >/dev/null || return 1
+        grep -F 'only active SCSI disk' "$tpdpc_script" >/dev/null || return 1
+    done
+    return 0
+}
+
+# LXC network tests require a rootfs-capable disposable storage. The test-owned
+# LVM-thin sandboxes must advertise rootdir in addition to images.
+test_lxc_rootfs_storage_contract() {
+    tlrsc_lib="$TEST_ROOT/lib/test-common.sh"
+    [ "$(grep -Fc -- '--content images,rootdir' "$tlrsc_lib")" -ge 2 ] || {
+        printf 'Disposable lvmthin test storages do not advertise rootdir content.\n' >&2
+        return 1
+    }
+    grep -F 'pct config "$NET_CT"' "$TEST_ROOT/groups/90-network.sh" >/dev/null || return 1
+    grep -F 'pct set "$NET_CT" --net0' "$TEST_ROOT/groups/90-network.sh" >/dev/null || return 1
+    return 0
 }
 
 # Verifies normal version output without exercising command preflight.

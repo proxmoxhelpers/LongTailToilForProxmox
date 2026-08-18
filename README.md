@@ -230,7 +230,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `move-disk-to-vm.sh`
 
-Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; numeric selectors understand both `vm-` and `base-` names, with hot/pause/stop/restart source-state control. Source `unusedN` cleanup is config-only so removing the stale source reference cannot free the moved LV.
+Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; numeric selectors understand both `vm-` and `base-` names, with hot/pause/stop/restart source-state control. Source `unusedN` cleanup is config-only so removing the stale source reference cannot free the moved LV. For a running VM losing a SCSI disk in `pause` mode, Proxmox must be able to hot-unplug the disk without removing its controller; `virtio-scsi-single` and last-SCSI-controller removal are refused before mutation.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-disk-to-vm.sh" -O "move-disk-to-vm.sh" && chmod +x "move-disk-to-vm.sh"
@@ -292,7 +292,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-snapshot-and-add-to-vm.sh`
 
-Create an LVM-thin snapshot from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with device selection, state handling and optional `boot` promotion.
+Create an LVM-thin snapshot from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, including template/base LVs sized from LVM metadata, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with device selection, state handling and optional `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-add-to-vm.sh" -O "create-disk-snapshot-and-add-to-vm.sh" && chmod +x "create-disk-snapshot-and-add-to-vm.sh"
@@ -304,7 +304,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-copy-and-add-to-vm.sh`
 
-Create a full verified copy from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with destination VG/device selection, state handling and optional `boot` promotion.
+Create a full verified copy from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, including template/base LVs sized from LVM metadata, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with destination VG/device selection, state handling and optional `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
@@ -316,7 +316,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-copy-and-overwrite-disk-on-vm.sh`
 
-Create and byte-verify an independent copy using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion.
+Create and byte-verify an independent copy using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion. `pause` replacement of a running SCSI target is preflight-refused when Proxmox would need to remove a per-disk or last SCSI controller.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-overwrite-disk-on-vm.sh" -O "create-disk-copy-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-copy-and-overwrite-disk-on-vm.sh"
@@ -328,7 +328,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-snapshot-and-overwrite-disk-on-vm.sh`
 
-Create an LVM-thin snapshot using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion.
+Create an LVM-thin snapshot using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion. `pause` replacement of a running SCSI target is preflight-refused when Proxmox would need to remove a per-disk or last SCSI controller.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-overwrite-disk-on-vm.sh" -O "create-disk-snapshot-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-snapshot-and-overwrite-disk-on-vm.sh"
@@ -569,7 +569,7 @@ vm-VMID-disk-N
 base-VMID-disk-N
 ```
 
-`base-` is used by Proxmox templates/base images. Operations that rename an existing managed volume preserve its family; operations that create a destination disk use `base-` when the destination QEMU guest is a template and `vm-` otherwise. Disk-number selectors first prefer the current VMID and may fall back to a stale embedded VMID only when exactly one configured managed volume has that `disk-N`.
+`base-` is used by Proxmox templates/base images. Operations that rename an existing managed volume preserve its family; operations that create a destination disk use `base-` when the destination QEMU guest is a template and `vm-` otherwise. Numeric `disk-N` selectors consider both current and stale configured `vm-`/`base-` names and refuse the operation if more than one configured disk matches that number.
 
 ## Safety model
 
@@ -587,11 +587,11 @@ Protected-host comparisons include pre-existing VG/PV/LV metadata, canonical sto
 
 The last fully documented real-Proxmox integration-validated POSIX baseline is **v3.0.1**, whose then-current 36-command suite completed cleanly with dry-run state unchanged and protected guest/LVM/storage state returned to baseline.
 
-The current **v3.4.3** release candidate contains 42 standalone helpers and an expanded **84-case** real integration definition plus static/CLI contracts. The suite now covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
+The current **v3.4.4** release candidate contains 42 standalone helpers and an expanded **86-case** real integration definition plus static/CLI contracts. The suite covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
 
-The v3.4.3 harness also protects more host state than the earlier baseline: it records local guest runtime status and firewall checksums, samples disposable LV content for dry-run/refusal comparisons, and uses layered cleanup that stops rather than guessing when ownership cannot be proven.
+The second current-generation real-host run, against v3.4.3 on 2026-08-17, completed **75 of 84 integration cases successfully**, with **6 case failures** and **3 network cases blocked during fixture setup**. Seven of ten groups were otherwise clean. Crucially, every group—including the failed/setup-aborted groups—produced protected before/after snapshots with **zero differences** across pre-existing VG/PV/LV metadata, storage semantics, guest configuration checksums, local QEMU/LXC runtime state and firewall checksums.
 
-The first full v3.4.2 real-host attempt exposed several useful regressions before promotion: an invalid `partx --show --raw` combination, destructive source-`unusedN` cleanup in `move-disk-to-vm.sh`, an undefined test-only `trim` dependency, a bus-incompatible `iothread` option, an invalid rootless LXC network fixture, brittle export assertions, and two test expectation/exit-status issues. v3.4.3 contains targeted fixes and static regressions for those findings; it still requires a fresh real-host rerun.
+That v3.4.3 run isolated three remaining issues: template/base create helpers used `blockdev` rather than LVM metadata for source size; Proxmox rejects paused hot-unplug when removing a per-disk or last SCSI controller; and the disposable LVM-thin network-test storage advertised `images` but not LXC `rootdir`. v3.4.4 fixes those points, adds preflight refusal for unsafe paused-SCSI topologies, strengthens positive pause fixtures with a second disposable SCSI disk on a shared controller, and adds two refusal cases. It still requires a fresh real-host rerun before promotion.
 
 Run the full current suite on a disposable or non-production Proxmox node:
 
@@ -599,7 +599,7 @@ Run the full current suite on a disposable or non-production Proxmox node:
 ./tests/run-all-tests.sh --run --verbose
 ```
 
-A v3.4.3 build should be described as **release-candidate / statically validated** until that real-host run finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
+A v3.4.4 build should be described as **release-candidate / statically validated** until that real-host run finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
 
 ## Why this exists
 
@@ -648,6 +648,8 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [v3.4.2 static validation](docs/V3.4.2-STATIC-VALIDATION.md)
 - [v3.4.3 real-integration triage and fixes](docs/V3.4.3-REAL-INTEGRATION-TRIAGE.md)
 - [v3.4.3 static validation](docs/V3.4.3-STATIC-VALIDATION.md)
+- [v3.4.4 second real-run triage and fixes](docs/V3.4.4-SECOND-REAL-RUN-TRIAGE.md)
+- [v3.4.4 static validation](docs/V3.4.4-STATIC-VALIDATION.md)
 - [Current command-by-command test matrix](tests/TEST-MATRIX.md)
 - [v3.2.3 empty-target behavior](docs/V3.2.3-EMPTY-TARGET.md)
 - [v3.2.3 static validation](docs/V3.2.3-STATIC-VALIDATION.md)

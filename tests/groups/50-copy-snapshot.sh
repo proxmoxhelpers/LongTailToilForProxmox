@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"
-    TEST_SUITE_VERSION="2.8.1"
+    PROJECT_VERSION="3.4.4"
+    TEST_SUITE_VERSION="2.8.2"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -33,6 +33,7 @@ main() {
     run_case "create add helpers pause/stop/restart source-state modes" test_create_add_state_modes
     run_case "create add helpers refuse occupied exact destination slot" test_create_add_occupied_slot_refusal
     run_case "all four create helpers refuse ambiguous source disk-N" test_create_source_ambiguity_refusal
+    run_case "overwrite helpers pause refuse unsafe sole-SCSI topology" test_overwrite_pause_sole_scsi_refusal
     run_case "create-disk-snapshot-and-add-to-vm.sh base/template naming" test_create_base_snapshot_add
     run_case "create-disk-copy-and-add-to-vm.sh base/template naming" test_create_base_copy_add
     run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh base/template naming" test_create_base_snapshot_overwrite
@@ -90,10 +91,14 @@ prepare_copy_fixture() {
     attach_test_lv "$COPY_SRC_VM" "$TEST_STORAGE_A" "$COPY_SRC_LV_NAME" scsi0
 
     COPY_OVERWRITE_VM="$(create_test_vm copy-overwrite)"
+    qm set "$COPY_OVERWRITE_VM" --scsihw virtio-scsi-pci >/dev/null
     COPY_OVERWRITE_OLD_NAME="vm-${COPY_OVERWRITE_VM}-disk-0"
     COPY_OVERWRITE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_OLD_NAME" 32M)"
     write_test_pattern "$COPY_OVERWRITE_OLD_LV" "copy-overwrite-old"
     attach_test_lv "$COPY_OVERWRITE_VM" "$TEST_STORAGE_B" "$COPY_OVERWRITE_OLD_NAME" scsi0
+    COPY_OVERWRITE_KEEPER_NAME="vm-${COPY_OVERWRITE_VM}-disk-98"
+    COPY_OVERWRITE_KEEPER_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_KEEPER_NAME" 16M)"
+    attach_test_lv "$COPY_OVERWRITE_VM" "$TEST_STORAGE_B" "$COPY_OVERWRITE_KEEPER_NAME" scsi1
     COPY_OVERWRITE_OCCUPIED_ARCHIVE_NAME="vm-${COPY_OVERWRITE_VM}-disk-901"
     COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_NAME" 16M)"
     COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | awk '{$1=$1;print}')"
@@ -120,6 +125,9 @@ prepare_copy_fixture() {
     SNAP_OVERWRITE_DELETE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_DELETE_OLD_NAME" 32M)"
     write_test_pattern "$SNAP_OVERWRITE_DELETE_OLD_LV" "snapshot-overwrite-delete-old"
     attach_test_lv "$SNAP_OVERWRITE_DELETE_VM" "$TEST_STORAGE_B" "$SNAP_OVERWRITE_DELETE_OLD_NAME" scsi0
+    SNAP_OVERWRITE_DELETE_KEEPER_NAME="vm-${SNAP_OVERWRITE_DELETE_VM}-disk-98"
+    SNAP_OVERWRITE_DELETE_KEEPER_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_DELETE_KEEPER_NAME" 16M)"
+    attach_test_lv "$SNAP_OVERWRITE_DELETE_VM" "$TEST_STORAGE_B" "$SNAP_OVERWRITE_DELETE_KEEPER_NAME" scsi1
 
     COPY_EMPTY_VM="$(create_test_vm copy-empty-target)"
     SNAP_EMPTY_VM="$(create_test_vm snapshot-empty-target)"
@@ -228,6 +236,28 @@ test_create_source_ambiguity_refusal() {
     run_expect_fail_unchanged "snapshot-overwrite-ambiguous-source" create-disk-snapshot-and-overwrite-disk-on-vm.sh "$tcsar_src" disk-0 "$tcsar_dst" scsi0
 }
 
+test_overwrite_pause_sole_scsi_refusal() {
+    tops_copy_vm="$(create_test_vm overwrite-pause-sole-copy)"
+    tops_copy_name="vm-${tops_copy_vm}-disk-0"
+    tops_copy_lv="$(create_thin_lv "$TEST_VG_B" "$tops_copy_name" 16M)"
+    attach_test_lv "$tops_copy_vm" "$TEST_STORAGE_B" "$tops_copy_name" scsi0
+    qm start "$tops_copy_vm" >/dev/null
+    run_expect_fail_unchanged "copy-overwrite-pause-sole-scsi" create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$tops_copy_vm" scsi0 pause
+    qm config "$tops_copy_vm" | grep -F "scsi0: $TEST_STORAGE_B:$tops_copy_name" >/dev/null
+    assert_lv_exists "$tops_copy_lv"
+    qm stop "$tops_copy_vm" >/dev/null
+
+    tops_snap_vm="$(create_test_vm overwrite-pause-sole-snapshot)"
+    tops_snap_name="vm-${tops_snap_vm}-disk-0"
+    tops_snap_lv="$(create_thin_lv "$TEST_VG_B" "$tops_snap_name" 16M)"
+    attach_test_lv "$tops_snap_vm" "$TEST_STORAGE_B" "$tops_snap_name" scsi0
+    qm start "$tops_snap_vm" >/dev/null
+    run_expect_fail_unchanged "snapshot-overwrite-pause-sole-scsi" create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$tops_snap_vm" scsi0 pause
+    qm config "$tops_snap_vm" | grep -F "scsi0: $TEST_STORAGE_B:$tops_snap_name" >/dev/null
+    assert_lv_exists "$tops_snap_lv"
+    qm stop "$tops_snap_vm" >/dev/null
+}
+
 test_create_base_snapshot_add() {
     tcbsa_name="base-${BASE_DST_VM}-disk-1"
     run_dryrun_unchanged "create-base-snapshot-add" create-disk-snapshot-and-add-to-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_DST_VM" scsi1
@@ -291,6 +321,8 @@ test_create_copy_overwrite() {
     [ "$(lvs --noheadings -o lv_uuid "$tcow_archive_path" | awk '{$1=$1;print}')" = "$tcow_old_uuid" ]
     [ "$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | awk '{$1=$1;print}')" = "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
     qm config "$COPY_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcow_archive_volid}([,[:space:]]|$)" >/dev/null
+    qm config "$COPY_OVERWRITE_VM" | grep -F "scsi1: $TEST_STORAGE_B:$COPY_OVERWRITE_KEEPER_NAME" >/dev/null
+    assert_lv_exists "$COPY_OVERWRITE_KEEPER_LV"
     qm config "$COPY_OVERWRITE_VM" | grep -qE '^boot:.*order=scsi0([;,]|$)'
 }
 
@@ -358,6 +390,8 @@ test_create_snapshot_overwrite_delete() {
     lvs "$tsod_archive_path" >/dev/null 2>&1 && return 1
     lvs --noheadings -o lv_uuid 2>/dev/null | grep -F "$tsod_old_uuid" >/dev/null && return 1
     ! qm config "$SNAP_OVERWRITE_DELETE_VM" | grep -F "$tsod_archive_name" >/dev/null
+    qm config "$SNAP_OVERWRITE_DELETE_VM" | grep -F "scsi1: $TEST_STORAGE_B:$SNAP_OVERWRITE_DELETE_KEEPER_NAME" >/dev/null
+    assert_lv_exists "$SNAP_OVERWRITE_DELETE_KEEPER_LV"
 }
 
 test_create_copy_overwrite_empty() {

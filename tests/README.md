@@ -1,13 +1,27 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.8.1**  
-Project target: **3.4.3**
+Test suite version: **2.8.2**  
+Project target: **3.4.4**
 
 This suite exercises all 42 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.8.2 — v3.4.4 second-real-run corrections
+
+The v3.4.3 real-host rerun was substantially cleaner: 75 of 84 integration cases passed, 6 failed, and 3 network cases were blocked during fixture setup. Seven of ten groups were clean. Every group, including the failed/setup-aborted groups, produced protected baseline/after snapshots with zero differences.
+
+The remaining findings were narrower:
+
+- all three template/base create-helper cases failed because source size was obtained with `blockdev`; v3.4.4 uses authoritative `lvs --units b --nosuffix -o lv_size` metadata for all four create helpers;
+- Proxmox rejected `qm set --delete scsiN` while a VM was suspended when removing a per-disk or last SCSI controller. The helpers now preflight-refuse `pause` for `virtio-scsi-single` and sole-SCSI-controller removal before any mutation, while the positive pause fixtures keep another disposable SCSI disk on a shared `virtio-scsi-pci` controller;
+- the network group’s disposable LVM-thin storage supported `images` but not `rootdir`, so the config-only CT fixture could not be validated as a real LXC rootfs consumer. Test storages now advertise `images,rootdir`, and the fixture validates `pct config` and creates the initial NIC with `pct set`.
+
+Two new refusal cases explicitly lock in safe paused-SCSI behavior for move and overwrite operations. The integration definition therefore expands from 84 to **86 cases**.
+
+Three new static regressions require LVM-metadata source sizing, pause-detach preflight protection, and rootfs-capable LXC test storage.
 
 ## v2.8.1 — v3.4.3 first-real-run corrections
 

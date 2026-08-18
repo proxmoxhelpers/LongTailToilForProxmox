@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"
-    TEST_SUITE_VERSION="2.8.1"
+    PROJECT_VERSION="3.4.4"
+    TEST_SUITE_VERSION="2.8.2"
     TEST_GROUP="network"
     test_reset_counters
     test_parse_arguments "$@"
@@ -66,10 +66,12 @@ prepare_network_fixture() {
     NET_CT_ROOT_NAME="vm-${NET_CT}-disk-0"
     create_thin_lv "$TEST_VG_A" "$NET_CT_ROOT_NAME" 16M >/dev/null
     attach_test_ct_lv "$NET_CT" "$TEST_STORAGE_A" "$NET_CT_ROOT_NAME" rootfs 16M
+    pct config "$NET_CT" >/dev/null 2>&1 || die "Disposable CT rootfs fixture is not valid."
     qm set "$NET_VM1" --net0 "virtio=02:00:00:00:00:11,bridge=$NETWORK_BRIDGE,queues=2" >/dev/null
     qm set "$NET_VM2" --net0 "virtio=02:00:00:00:00:12,bridge=$NETWORK_BRIDGE,queues=4" >/dev/null
-    printf 'net0: name=eth0,bridge=%s,hwaddr=02:00:00:00:00:13,type=veth\n' "$NETWORK_BRIDGE" >> "/etc/pve/lxc/${NET_CT}.conf"
-    NET_MISSING="$(allocate_free_vmid)"
+    pct set "$NET_CT" --net0 "name=eth0,bridge=$NETWORK_BRIDGE,hwaddr=02:00:00:00:00:13,type=veth" >/dev/null
+    pct config "$NET_CT" >/dev/null 2>&1 || die "Disposable CT network fixture is not valid."
+    NET_MISSING="$(allocate_free_vmid)" || die "Could not allocate missing-guest test ID."
 }
 
 ############################################################

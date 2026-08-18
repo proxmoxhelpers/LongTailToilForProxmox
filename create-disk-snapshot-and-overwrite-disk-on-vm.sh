@@ -591,7 +591,7 @@ resolve_source() {
     SOURCE_LV="$(lvs --noheadings -o lv_name "$SOURCE_PATH" 2>/dev/null | trim)"
     SOURCE_POOL="$(lvs --noheadings -o pool_lv "$SOURCE_PATH" 2>/dev/null | trim)"
     SOURCE_ATTR="$(lvs --noheadings -o lv_attr "$SOURCE_PATH" 2>/dev/null | trim)"
-    SOURCE_SIZE_BYTES="$(blockdev --getsize64 "$SOURCE_PATH" 2>/dev/null || :)"
+    SOURCE_SIZE_BYTES="$(lvs --noheadings --units b --nosuffix -o lv_size "$SOURCE_PATH" 2>/dev/null | awk 'NF {printf "%.0f\n", $1; exit}' || :)"
     [ -n "$SOURCE_VG" ] && [ -n "$SOURCE_LV" ] || die "Could not resolve source LVM metadata."
     case "$SOURCE_SIZE_BYTES" in ''|*[!0-9]*) die "Could not determine source LV size." ;; esac
 }
@@ -775,6 +775,27 @@ resolve_destination() {
     esac
     DEST_DISK_NUMBER="${DEST_OLD_LV##*-disk-}"
     case "$DEST_DISK_NUMBER" in ''|*[!0-9]*) die "Could not determine destination disk number from $DEST_OLD_LV." ;; esac
+}
+
+
+# validate_pause_detach_capability
+# Refuses pause-mode SCSI replacement topologies that Proxmox cannot safely
+# hot-unplug while the VM is suspended.
+validate_pause_detach_capability() {
+    [ "$MODE" = "pause" ] || return 0
+    [ "$DEST_EXISTS" -eq 1 ] || return 0
+    case "$DEST_STATUS" in running|paused) ;; *) return 0 ;; esac
+    case "$DEST_SLOT" in scsi[0-9]*) ;; *) return 0 ;; esac
+
+    vpdc_scsihw="$(printf '%s\n' "$DEST_CONFIG" | sed -n 's/^scsihw:[[:space:]]*//p' | head -n1)"
+    if [ "$vpdc_scsihw" = "virtio-scsi-single" ]; then
+        die "pause mode cannot safely replace $DEST_SLOT on VM $DEST_VM while using virtio-scsi-single; Proxmox hot-unplugs the per-disk controller and rejects it while suspended. Use hot, stop, or restart."
+    fi
+
+    vpdc_count="$(printf '%s\n' "$DEST_CONFIG" | awk -F': ' '$1 ~ /^scsi[0-9]+$/ {n++} END {print n+0}')"
+    if [ "$vpdc_count" -le 1 ]; then
+        die "pause mode cannot safely replace the only active SCSI disk on VM $DEST_VM while suspended; Proxmox attempts to remove the SCSI controller. Use hot, stop, or restart, or keep another SCSI disk on the shared controller."
+    fi
 }
 
 # apply_destination_state
@@ -1123,7 +1144,7 @@ verify_destination_boot_first() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.4.1"
+    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.4.4"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
@@ -1142,6 +1163,7 @@ main() {
     [ -n "$SOURCE_POOL" ] || { printf 'Source: %s\nLV attributes: %s\n' "$SOURCE_PATH" "$SOURCE_ATTR"; die "Source is not an LVM-thin volume."; }
     resolve_destination
     [ "$SOURCE_UUID" != "$DEST_OLD_UUID" ] || die "Source and destination refer to the same logical volume."
+    validate_pause_detach_capability
     select_storage
     select_new_disk_name
     print_plan
@@ -1215,6 +1237,10 @@ DESTINATION SELECTORS
 DESTINATION VM STATE
   default/hot  Replace/add without pausing or stopping the destination VM.
   pause        Pause a running destination VM during replacement, then resume.
+               For SCSI targets, pause requires a shared controller with another
+               active SCSI disk. virtio-scsi-single and last-SCSI-controller
+               removal are refused before mutation because Proxmox rejects that
+               hot-unplug while the VM is suspended.
   stop         Stop a running destination VM and leave it stopped.
   restart      Stop a running destination VM, change the disk, then start it.
 

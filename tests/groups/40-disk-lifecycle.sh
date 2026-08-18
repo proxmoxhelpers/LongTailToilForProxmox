@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"
-    TEST_SUITE_VERSION="2.8.1"
+    PROJECT_VERSION="3.4.4"
+    TEST_SUITE_VERSION="2.8.2"
     TEST_GROUP="disk-lifecycle"
     test_reset_counters
     test_parse_arguments "$@"
@@ -36,6 +36,7 @@ main() {
     run_case "shared-volume delete/cleanup refusal" test_shared_volume_refusal
     run_case "move-disk-to-vm.sh full-path hot mode" test_move_hot
     run_case "move-disk-to-vm.sh numeric pause mode" test_move_pause
+    run_case "move-disk-to-vm.sh pause refuses unsafe sole-SCSI topology" test_move_pause_sole_scsi_refusal
     run_case "move-disk-to-vm.sh numeric stop mode" test_move_stop
     run_case "move-disk-to-vm.sh explicit-slot restart mode" test_move_restart
     run_case "move-disk-to-vm.sh base/template numeric selector real move" test_move_base_selector
@@ -236,11 +237,30 @@ test_move_hot() {
 test_move_pause() {
     prepare_one_move move-pause 1
     qm set "$MOVE_CASE_SRC" --scsihw virtio-scsi-pci >/dev/null
+    tmp_keeper_name="vm-${MOVE_CASE_SRC}-disk-99"
+    tmp_keeper_lv="$(create_thin_lv "$TEST_VG_A" "$tmp_keeper_name" 16M)"
+    attach_test_lv "$MOVE_CASE_SRC" "$TEST_STORAGE_A" "$tmp_keeper_name" scsi1
     qm start "$MOVE_CASE_SRC" >/dev/null
     run_dryrun_unchanged "move-disk-to-vm-pause" move-disk-to-vm.sh pause "$MOVE_CASE_SRC" 1 "$MOVE_CASE_DST"
     project_cmd move-disk-to-vm.sh "$MOVE_CASE_SRC" 1 "$MOVE_CASE_DST" pause
     [ "$(qm status "$MOVE_CASE_SRC" | awk '{print $2}')" = "running" ]
     qm config "$MOVE_CASE_DST" | grep -F "$TEST_STORAGE_A:$MOVE_CASE_NAME" >/dev/null
+    qm config "$MOVE_CASE_SRC" | grep -F "scsi1: $TEST_STORAGE_A:$tmp_keeper_name" >/dev/null
+    assert_lv_exists "$tmp_keeper_lv"
+}
+
+test_move_pause_sole_scsi_refusal() {
+    tmps_src="$(create_test_vm move-pause-sole-src)"
+    tmps_dst="$(create_test_vm move-pause-sole-dst)"
+    tmps_name="vm-${tmps_src}-disk-0"
+    tmps_lv="$(create_thin_lv "$TEST_VG_A" "$tmps_name" 16M)"
+    attach_test_lv "$tmps_src" "$TEST_STORAGE_A" "$tmps_name" scsi0
+    qm start "$tmps_src" >/dev/null
+    [ "$(qm status "$tmps_src" | awk '{print $2}')" = "running" ]
+    run_expect_fail_unchanged "move-pause-sole-scsi" move-disk-to-vm.sh pause "$tmps_src" 0 "$tmps_dst"
+    qm config "$tmps_src" | grep -F "scsi0: $TEST_STORAGE_A:$tmps_name" >/dev/null
+    assert_lv_exists "$tmps_lv"
+    qm stop "$tmps_src" >/dev/null
 }
 
 test_move_stop() {

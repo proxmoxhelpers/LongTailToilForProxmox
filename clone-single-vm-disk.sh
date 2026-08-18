@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.3.1"
+    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.3.1"
     DEST_VG=""
     parse_arguments "$@"
     check_elevation
@@ -822,7 +822,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.3.1"
+    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.3.1"
     DEST_VG=""
     parse_arguments "$@"
     check_elevation
@@ -1468,7 +1468,7 @@ resolve_source() {
     SOURCE_LV="$(lvs --noheadings -o lv_name "$SOURCE_PATH" 2>/dev/null | trim)"
     SOURCE_POOL="$(lvs --noheadings -o pool_lv "$SOURCE_PATH" 2>/dev/null | trim)"
     SOURCE_ATTR="$(lvs --noheadings -o lv_attr "$SOURCE_PATH" 2>/dev/null | trim)"
-    SOURCE_SIZE_BYTES="$(blockdev --getsize64 "$SOURCE_PATH" 2>/dev/null || :)"
+    SOURCE_SIZE_BYTES="$(lvs --noheadings --units b --nosuffix -o lv_size "$SOURCE_PATH" 2>/dev/null | awk 'NF {printf "%.0f\n", $1; exit}' || :)"
     [ -n "$SOURCE_VG" ] && [ -n "$SOURCE_LV" ] || die "Could not resolve source LVM metadata."
     case "$SOURCE_SIZE_BYTES" in ''|*[!0-9]*) die "Could not determine source LV size." ;; esac
 }
@@ -1636,7 +1636,7 @@ verify_destination_boot_first() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.4.1"
+    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.4.4"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""

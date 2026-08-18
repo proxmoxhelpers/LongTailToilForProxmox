@@ -1,4 +1,4 @@
-# Test Coverage Matrix — v3.4.3
+# Test Coverage Matrix — v3.4.4
 
 Every public command has at least one non-static integration reference. For mutating commands, the static suite additionally requires at least one `run_dryrun_unchanged` integration case. The matrix describes representative real and negative/variant coverage; it does **not** claim combinatorial testing of every possible argument order, storage backend, filesystem, Proxmox release, or failure injection point.
 
@@ -16,10 +16,10 @@ Every public command has at least one non-static integration reference. For muta
 | 10 | `clone-vm-config-only.sh` | `80-vm-config.sh` | Dry-run + real diskless config clone. | Name/description preserved; storage-backed entries absent in clone. |
 | 11 | `copy-disk-between-vms.sh` | `50-copy-snapshot.sh` | Dry-run + real cross-VM independent copy. | Content equality and independently allocated destination verified. |
 | 12 | `copy-lvm.sh` | `20-lvm.sh` | Dry-run + real thin-LV copy and regular-LV destination copy. | Full byte comparison; static contract forbids sparse writes on regular-LV path. |
-| 13 | `create-disk-copy-and-add-to-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real copy using VM/disk, slot and full-path source forms; exact/bare-bus destinations; boot promotion. | hot/stop/restart source-state paths; occupied-slot and ambiguous disk-N refusals; template/base destination. |
-| 14 | `create-disk-copy-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real overwrite preserving final disk-N, slot/options and boot behavior; empty-target creation. | Archive collision forces disk-902; preserve/delete paths; ambiguous source refusal. |
-| 15 | `create-disk-snapshot-and-add-to-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real linked snapshot using slot/full-path sources; exact/bare-bus destinations; boot promotion. | hot/pause source-state paths; occupied-slot and ambiguous disk-N refusals; template/base destination. |
-| 16 | `create-disk-snapshot-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real overwrite preserving final disk-N, snapshot origin, slot/options and boot behavior; empty-target creation. | Archive preserve/delete paths; full-path destination; template/base overwrite; ambiguous source refusal. |
+| 13 | `create-disk-copy-and-add-to-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real copy using VM/disk, slot and full-path source forms; exact/bare-bus destinations; boot promotion; template/base source sizing from LVM metadata. | hot/stop/restart source-state paths; occupied-slot and ambiguous disk-N refusals; template/base destination. |
+| 14 | `create-disk-copy-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real overwrite preserving final disk-N, slot/options and boot behavior; empty-target creation. | Archive collision forces disk-902; preserve/delete paths; ambiguous source refusal; unsafe paused-SCSI topology preflight refusal. |
+| 15 | `create-disk-snapshot-and-add-to-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real linked snapshot using slot/full-path sources; exact/bare-bus destinations; boot promotion; template/base source sizing from LVM metadata. | hot/pause source-state paths; occupied-slot and ambiguous disk-N refusals; template/base destination. |
+| 16 | `create-disk-snapshot-and-overwrite-disk-on-vm.sh` | `50-copy-snapshot.sh` | Dry-run + real overwrite preserving final disk-N, snapshot origin, slot/options and boot behavior; empty-target creation. | Archive preserve/delete paths; full-path destination; template/base overwrite; ambiguous source refusal; unsafe paused-SCSI topology preflight refusal. |
 | 17 | `delete-disk-from-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real deletion of disposable unused and active test disks. | Shared-reference refusal. |
 | 18 | `delete-lvm.sh` | `20-lvm.sh` | Dry-run + explicit DELETE confirmation on disposable LV. | Wrong-confirmation refusal with exact state unchanged. |
 | 19 | `detach-disk-from-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real detach to unusedN. | Running-VM refusal with runtime state verified unchanged. |
@@ -35,7 +35,7 @@ Every public command has at least one non-static integration reference. For muta
 | 29 | `mount-vm-drives.sh` | `30-mount.sh` | Dry-run + real read-only direct-LV mount plus read-write disposable mount. | RW persistence checked by remounting read-only. |
 | 30 | `mount-vm-root.sh` | `30-mount.sh` | Dry-run + real synthetic Linux-root detection from disposable partition. | Detected root content verified. |
 | 31 | `move-disk-to-storage.sh` | `70-storage-io.sh` | Dry-run + real move between disposable storages. | Disk options and first-32MiB hash preserved; old LV removed. |
-| 32 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real full-path, numeric and explicit-slot moves. | hot/pause/stop/restart; pause fixture uses hot-unpluggable shared SCSI controller; base/template numeric selector; ambiguous disk-N refusal then explicit-slot resolution. |
+| 32 | `move-disk-to-vm.sh` | `40-disk-lifecycle.sh` | Dry-run + real full-path, numeric and explicit-slot moves. | hot/pause/stop/restart; positive pause uses a shared SCSI controller with another disk; unsafe sole/per-disk SCSI pause is refused before mutation; base/template numeric selector; ambiguous disk-N refusal then explicit-slot resolution. |
 | 33 | `move-lvm.sh` | `20-lvm.sh` | Dry-run + real cross-VG move and same-VG rename branch. | Content hash preserved cross-VG; LV UUID preserved same-VG. |
 | 34 | `recover-vm-from-volumes.sh` | `80-vm-config.sh` | Dry-run + real recovery from two vm-family orphan LVs and base-family auto-VG discovery. | Recovered guest config/storage references verified. |
 | 35 | `rename-lvm.sh` | `20-lvm.sh` | Dry-run + real path-form and VG/old/new-form rename. | LV UUID preserved in both forms. |
@@ -57,4 +57,4 @@ The suite uses three complementary layers:
 
 A command row means its material behavior is represented, not that every syntactic permutation is exhaustively enumerated. State modes and selector families are distributed across the relevant create/move helpers so the underlying implementation branches are exercised without multiplying destructive integration operations unnecessarily.
 
-The current v3.4.2 suite remains a release-candidate test definition until it is run on a disposable real Proxmox host with zero failures and zero protected-state anomalies.
+The current v3.4.4 suite defines 86 real integration cases and remains a release-candidate test definition until it is run on a disposable real Proxmox host with zero failures and zero protected-state anomalies.

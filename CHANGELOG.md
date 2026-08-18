@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.4.4 — 2026-08-17
+
+Second real-Proxmox integration-run corrections.
+
+- The v3.4.3 real-host rerun passed 75 of 84 integration cases, with 6 case failures and 3 network cases blocked during fixture setup; all nine groups produced protected before/after snapshots with zero differences.
+- All four create helpers now obtain managed source LV size from `lvs --units b --nosuffix -o lv_size` instead of `blockdev`, allowing template/base LVs to pass preflight reliably.
+- `move-disk-to-vm.sh` and both overwrite helpers now preflight-refuse `pause` for `virtio-scsi-single` and sole-SCSI-controller removal on a running VM, because real Proxmox rejects that controller hot-unplug while suspended.
+- Positive pause integration fixtures now keep a second disposable SCSI disk on a shared `virtio-scsi-pci` controller; two additional refusal cases verify the unsafe topology is rejected before mutation.
+- Disposable LVM-thin test storages now advertise `images,rootdir`, and the network CT fixture validates its rootfs/config and initial NIC through `pct`.
+- The integration definition expands from 84 to 86 cases.
+- Added static regressions for LVM-metadata source sizing, pause-detach topology preflight, and rootfs-capable LXC test storage.
+- README and test documentation now record the v3.4.3 real-host result and the remaining validation boundary for v3.4.4.
+
 ## 3.4.3 — 2026-08-17
 
 Corrections from the first expanded v3.4.2 real-Proxmox integration attempt.

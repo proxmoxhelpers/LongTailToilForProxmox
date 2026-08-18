@@ -388,7 +388,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.3"; SCRIPT_VERSION="3.4.1"
+    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.4.4"
     MODE="hot"; MODE_ARG=""; ARG1=""; ARG2=""; ARG3=""; ARG_COUNT=0
     REFS_FILE=""; SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_VALUE=""; SOURCE_VOLID=""; SOURCE_ACTIVE=0
     SOURCE_STATUS=""; SOURCE_UNUSED=""; DEST_SLOT=""; DEST_TOUCHED=0; DEST_ATTACHED=0; SOURCE_DETACHED=0
@@ -405,6 +405,7 @@ main() {
     validate_source_references
     validate_source_guest_config
     validate_source_usage
+    validate_pause_detach_capability
     DEST_SLOT="$(first_free_scsi "$DEST_VM")" || die "Destination VM $DEST_VM has no free SCSI slot."
     print_transfer_plan
     install_transfer_traps
@@ -451,6 +452,10 @@ DESCRIPTION
 SOURCE VM STATE
   default   Hot-swap. Do not stop or pause the source VM.
   pause     Suspend a running source VM before detach, then resume it.
+            For SCSI disks, pause requires a shared controller with another
+            active SCSI disk; virtio-scsi-single and last-disk controller
+            removal are refused before mutation because Proxmox cannot safely
+            hot-unplug those controllers while the VM is suspended.
   stop      Stop a running source VM before detach and leave it stopped.
   restart   Stop a running source VM before detach, then start it again.
 
@@ -655,6 +660,29 @@ validate_source_usage() {
         assert_lv_idle "$LV"
         [ -z "$SOURCE_VM" ] || info "Source reference is $SOURCE_SLOT on VM $SOURCE_VM; it is already unused/inactive."
         if [ -z "$SOURCE_VM" ] && [ "$MODE" != "hot" ]; then die "$MODE requires a source VM that is actively losing a disk."; fi
+    fi
+}
+
+
+# validate_pause_detach_capability
+# Refuses a pause-mode SCSI detach topology that Proxmox cannot safely hot-unplug
+# while the VM is suspended (per-disk virtio-scsi-single controllers or the last
+# disk on a shared SCSI controller).
+validate_pause_detach_capability() {
+    [ "$MODE" = "pause" ] || return 0
+    [ "$SOURCE_ACTIVE" -eq 1 ] || return 0
+    case "$SOURCE_STATUS" in running|paused) ;; *) return 0 ;; esac
+    case "$SOURCE_SLOT" in scsi[0-9]*) ;; *) return 0 ;; esac
+
+    vpdc_cfg="$(qm config "$SOURCE_VM")"
+    vpdc_scsihw="$(printf '%s\n' "$vpdc_cfg" | sed -n 's/^scsihw:[[:space:]]*//p' | head -n1)"
+    if [ "$vpdc_scsihw" = "virtio-scsi-single" ]; then
+        die "pause mode cannot safely detach $SOURCE_SLOT from VM $SOURCE_VM while using virtio-scsi-single; Proxmox hot-unplugs the per-disk controller and rejects it while suspended. Use hot, stop, or restart."
+    fi
+
+    vpdc_count="$(printf '%s\n' "$vpdc_cfg" | awk -F': ' '$1 ~ /^scsi[0-9]+$/ {n++} END {print n+0}')"
+    if [ "$vpdc_count" -le 1 ]; then
+        die "pause mode cannot safely detach the only active SCSI disk from VM $SOURCE_VM while suspended; Proxmox attempts to remove the SCSI controller. Use hot, stop, or restart, or keep another SCSI disk on the shared controller."
     fi
 }
 

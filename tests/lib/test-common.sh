@@ -288,9 +288,9 @@ create_storage_sandbox() {
     lvcreate -L 768M -T "$TEST_VG_A/$TEST_POOL" >/dev/null 2>&1
     lvcreate -L 768M -T "$TEST_VG_B/$TEST_POOL" >/dev/null 2>&1
 
-    pvesm add lvmthin "$TEST_STORAGE_A" --vgname "$TEST_VG_A" --thinpool "$TEST_POOL" --content images
+    pvesm add lvmthin "$TEST_STORAGE_A" --vgname "$TEST_VG_A" --thinpool "$TEST_POOL" --content images,rootdir
     printf '%s|%s\n' "$TEST_STORAGE_A" "$TEST_VG_A" >> "$TEST_STORAGE_OWNED"
-    pvesm add lvmthin "$TEST_STORAGE_B" --vgname "$TEST_VG_B" --thinpool "$TEST_POOL" --content images
+    pvesm add lvmthin "$TEST_STORAGE_B" --vgname "$TEST_VG_B" --thinpool "$TEST_POOL" --content images,rootdir
     printf '%s|%s\n' "$TEST_STORAGE_B" "$TEST_VG_B" >> "$TEST_STORAGE_OWNED"
 }
 
