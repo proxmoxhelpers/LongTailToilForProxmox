@@ -389,118 +389,281 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.0.0"
-    SLOT=""
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="1.1.0"
+    ALL_LVS_FILE=""; REFS_FILE=""
     parse_arguments "$@"
-    check_elevation
 }
 
 main() {
-    [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    install_temp_cleanup
-    need_commands qm pvesm mktemp
-    validate_import
-    import_disk
-    attach_imported_disk
+    need_commands lvs pvesm find awk sed grep sort mktemp cp
+    build_lvm_catalog
+    collect_guest_lvm_references
+    print_verification
+    print_remaining_lvs
 }
 
-end() {
-    [ -z "${BEFORE_FILE:-}" ] || rm -f "$BEFORE_FILE"
-    [ -z "${AFTER_FILE:-}" ] || rm -f "$AFTER_FILE"
-    dryrun_summary
-}
+end() { cleanup_files; }
 
 ############################################################
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <image-file> <vmid> <destination-storage> [scsiN] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") [dryrun]
+
+DESCRIPTION
+  Lists every LVM volume referenced by Proxmox QEMU/LXC guests and verifies
+  managed Proxmox disk numbering.
+
+  Red rows identify managed LVs whose embedded VMID does not match the guest
+  that references them, for example VM 199 -> base-100-disk-1.
+
+  Yellow guest headings identify ACTIVE managed LVM disk-number problems:
+  numbering that does not start at disk-0, gaps in the sequence, or duplicate
+  disk-N values. unusedN entries are listed but do not participate in the
+  active numbering sequence.
+
+  Both vm-VMID-disk-N and base-VMID-disk-N are recognized. All LVs not
+  referenced by a visible guest are listed at the end.
+
+COLOURS
+  green   numbering looks consistent
+  yellow  active managed disk numbering does not start at 0
+  red     an LV embeds a different VMID than the guest that references it
+  cyan    informational / unmanaged LVM reference
+
+EOF
+    dryrun_help
+}
 
 parse_arguments() {
-    pa_count=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
             -h|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
-            *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) IMAGE="$1" ;; 2) VMID="$1" ;; 3) STORAGE="$1" ;; 4) SLOT="$1" ;; *) usage >&2; exit 2 ;; esac ;;
+            *) usage >&2; exit 2 ;;
         esac
         shift
     done
-    [ "$pa_count" -ge 3 ] && [ "$pa_count" -le 4 ] || { usage >&2; exit 2; }
 }
 
 ############################################################
-# VALIDATION / PRE-FLIGHT
+# DISCOVERY
 ############################################################
 
-# validate_import
-# Validates input image, destination VM/storage/slot and records the pre-import unused-disk state.
-validate_import() {
-    [ -f "$IMAGE" ] || die "Image file does not exist: $IMAGE"
-    require_qemu_vm "$VMID"; require_guest_stopped "$VMID"
-    pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "Storage unavailable: $STORAGE"
-    [ -n "$SLOT" ] || SLOT="$(first_free_scsi "$VMID")"
-    [ -z "$(disk_value "$VMID" "$SLOT")" ] || die "$SLOT is already occupied."
-    BEFORE_FILE="$(mktemp)" || die "Unable to create import state file."
-    register_temp_file "$BEFORE_FILE"
-    qm config "$VMID" | awk -F: '$1 ~ /^unused[0-9]+$/ {print $1 ":" $2}' > "$BEFORE_FILE"
+# managed_name_fields LV_NAME
+# Prints family|embedded-vmid|disk-number for vm-/base- managed names.
+managed_name_fields() (
+    mnf_name="$1"
+    case "$mnf_name" in
+        vm-*-disk-*|base-*-disk-*) ;;
+        *) exit 1 ;;
+    esac
+    mnf_family="${mnf_name%%-*}"
+    mnf_prefix="${mnf_name%-disk-*}"
+    mnf_vmid="${mnf_prefix#*-}"
+    mnf_disk="${mnf_name##*-disk-}"
+    case "$mnf_vmid" in ''|*[!0-9]*) exit 1 ;; esac
+    case "$mnf_disk" in ''|*[!0-9]*) exit 1 ;; esac
+    printf '%s|%s|%s\n' "$mnf_family" "$mnf_vmid" "$mnf_disk"
+)
+
+build_lvm_catalog() {
+    install_temp_cleanup
+    ALL_LVS_FILE="$(mktemp)" || die "Unable to create LVM catalog."; register_temp_file "$ALL_LVS_FILE"
+    REFS_FILE="$(mktemp)" || die "Unable to create guest-reference catalog."; register_temp_file "$REFS_FILE"
+
+    lvs --noheadings --separator '|' -o lv_uuid,lv_path,vg_name,lv_name,lv_size,pool_lv,origin 2>/dev/null |
+        awk -F'|' '{
+            for (i=1; i<=7; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+            if ($1 != "" && $2 != "") print $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7
+        }' | sort -t'|' -k3,3 -k4,4 > "$ALL_LVS_FILE"
+}
+
+# collect_guest_lvm_references
+# REFS_FILE columns:
+# vmid|type|name|slot|volid|uuid|path|lvname|family|embedded-vmid|disk-number
+collect_guest_lvm_references() {
+    : > "$REFS_FILE"
+    all_guest_configs | while IFS= read -r cgr_cfg; do
+        [ -n "$cgr_cfg" ] || continue
+        cgr_id="${cgr_cfg##*/}"; cgr_id="${cgr_id%.conf}"
+        case "$cgr_id" in ''|*[!0-9]*) continue ;; esac
+
+        case "$cgr_cfg" in
+            */lxc/*) cgr_type="LXC"; cgr_name="$(awk -F': ' '$1=="hostname" {print $2; exit}' "$cgr_cfg")" ;;
+            *) cgr_type="QEMU"; cgr_name="$(awk -F': ' '$1=="name" {print $2; exit}' "$cgr_cfg")" ;;
+        esac
+        [ -n "$cgr_name" ] || cgr_name="-"
+
+        config_volume_references "$cgr_cfg" | while IFS='|' read -r cgr_slot cgr_volid; do
+            [ -n "$cgr_volid" ] || continue
+            cgr_path="$(pvesm path "$cgr_volid" 2>/dev/null || :)"
+            [ -n "$cgr_path" ] || continue
+            lvs "$cgr_path" >/dev/null 2>&1 || continue
+            cgr_uuid="$(lvs --noheadings -o lv_uuid "$cgr_path" 2>/dev/null | trim)"
+            [ -n "$cgr_uuid" ] || continue
+            cgr_row="$(awk -F'|' -v u="$cgr_uuid" '$1==u {print $2 "|" $4; exit}' "$ALL_LVS_FILE")"
+            [ -n "$cgr_row" ] || continue
+            cgr_catalog_path="${cgr_row%%|*}"
+            cgr_lvname="${cgr_row#*|}"
+            cgr_family="-"; cgr_embedded="-"; cgr_disk="-"
+            if cgr_managed="$(managed_name_fields "$cgr_lvname" 2>/dev/null)"; then
+                cgr_family="${cgr_managed%%|*}"
+                cgr_rest="${cgr_managed#*|}"
+                cgr_embedded="${cgr_rest%%|*}"
+                cgr_disk="${cgr_rest#*|}"
+            fi
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$cgr_id" "$cgr_type" "$cgr_name" "$cgr_slot" "$cgr_volid" "$cgr_uuid" \
+                "$cgr_catalog_path" "$cgr_lvname" "$cgr_family" "$cgr_embedded" "$cgr_disk"
+        done
+    done | sort -t'|' -k1,1n -k4,4 -u > "$REFS_FILE"
+    return 0
 }
 
 ############################################################
-# HIGH LEVEL TASKS
+# RESULTS
 ############################################################
 
-# import_disk
-# Invokes qm importdisk after all import preflight has completed.
-import_disk() {
-    info "Importing $IMAGE into $STORAGE..."
-    dryrun_cmd qm importdisk "$VMID" "$IMAGE" "$STORAGE"
+active_numbering_status() (
+    ans_id="$1"
+    awk -F'|' -v id="$ans_id" '
+        $1==id && $4 !~ /^unused[0-9]+$/ && $11 ~ /^[0-9]+$/ {print $11}
+    ' "$REFS_FILE" | sort -n |
+        awk '
+            function add_note(s) {
+                if (note == "") note=s
+                else note=note "; " s
+            }
+            BEGIN { have=0; expected=0; prev=-1; lastdup=-1 }
+            {
+                n=$1+0
+                if (!have) {
+                    have=1
+                    if (n != 0) add_note("ACTIVE STARTS AT disk-" n)
+                    expected=n+1
+                    prev=n
+                    next
+                }
+                if (n == prev) {
+                    if (lastdup != n) {
+                        add_note("DUPLICATE disk-" n)
+                        lastdup=n
+                    }
+                    next
+                }
+                if (n > expected) add_note("GAP AT disk-" expected)
+                expected=n+1
+                prev=n
+            }
+            END {
+                if (!have) print "NO ACTIVE MANAGED DISK-N"
+                else if (note == "") print "OK"
+                else print note
+            }
+        '
+)
+
+# guest_numbering_state VMID
+# Prints mismatch-count|active-min-disk|active-managed-count.
+guest_numbering_state() {
+    gns_id="$1"
+    awk -F'|' -v id="$gns_id" '
+        $1==id {
+            if ($10 != "-" && $10 != id) mismatch++
+            if ($4 !~ /^unused[0-9]+$/ && $11 ~ /^[0-9]+$/) {
+                if (!have || ($11+0) < min) min=$11+0
+                have=1
+                active++
+            }
+        }
+        END {
+            if (!have) min="-"
+            printf "%d|%s|%d\n", mismatch+0, min, active+0
+        }
+    ' "$REFS_FILE"
 }
 
-# attach_imported_disk
-#
-# Description:
-#   Identifies the newly-created unusedN entry, attaches that volume at the
-#   requested SCSI slot, and removes the duplicate unusedN config reference.
-#
-# Usage:
-#   attach_imported_disk
-#
-# Arguments:
-#   Uses VMID, STORAGE, SLOT and BEFORE_FILE.
-#
-# Output:
-#   Sets VOLID and UKEY.
-#
-# Returns:
-#   0 after verified attachment; exits on ambiguity or verification failure.
-############################################################
-attach_imported_disk() {
-    if dryrun_enabled; then
-        UKEY="unusedN"; VOLID="${STORAGE}:<imported-volume>"
-        dryrun_print_shell "qm set $(shell_quote "$VMID") --$(shell_quote "$SLOT") <volume-created-by-qm-importdisk>"
-        dryrun_print_shell "qm set $(shell_quote "$VMID") --delete <unusedN-created-by-qm-importdisk>"
-        dryrun_verify "Imported volume would be attached to $SLOT"
-        ok "Imported and attached $VOLID as $SLOT."
-        return 0
-    fi
+print_verification() {
+    section "VM / CT LVM disk-number verification"
+    if [ ! -s "$REFS_FILE" ]; then printf '%s\n' "(none)"; return 0; fi
 
-    AFTER_FILE="$(mktemp)" || die "Unable to create post-import state file."
-    register_temp_file "$AFTER_FILE"
-    qm config "$VMID" | awk -F: '$1 ~ /^unused[0-9]+$/ {print $1 ":" $2}' > "$AFTER_FILE"
-    ai_new="$(
-        while IFS= read -r ai_line; do
-            grep -Fx "$ai_line" "$BEFORE_FILE" >/dev/null 2>&1 || printf '%s\n' "$ai_line"
-        done < "$AFTER_FILE" | tail -n1
-    )"
-    [ -n "$ai_new" ] || die "Import finished but the new unused disk could not be identified."
-    UKEY="${ai_new%%:*}"
-    VOLID="$(disk_volid "$VMID" "$UKEY" || :)"; [ -n "$VOLID" ] || die "Could not resolve imported volume."
-    qm set "$VMID" "--$SLOT" "$VOLID"
-    [ "$(disk_volid "$VMID" "$SLOT")" = "$VOLID" ] || die "Attach verification failed."
-    if qm config "$VMID" | grep -qE "^${UKEY}:"; then qm set "$VMID" --delete "$UKEY"; fi
-    ok "Imported and attached $VOLID as $SLOT."
+    awk -F'|' '{print $1}' "$REFS_FILE" | sort -un | while IFS= read -r pv_id; do
+        [ -n "$pv_id" ] || continue
+        pv_first="$(awk -F'|' -v id="$pv_id" '$1==id {print $2 "|" $3; exit}' "$REFS_FILE")"
+        pv_type="${pv_first%%|*}"; pv_name="${pv_first#*|}"
+        pv_state="$(guest_numbering_state "$pv_id")"
+        pv_mismatch="${pv_state%%|*}"; pv_rest="${pv_state#*|}"; pv_min="${pv_rest%%|*}"; pv_active="${pv_rest#*|}"
+        pv_sequence="$(active_numbering_status "$pv_id")"
+
+        pv_head_color="$C_GREEN"; pv_notes="OK"
+        if [ "$pv_mismatch" -gt 0 ]; then
+            pv_head_color="$C_RED"; pv_notes="VMID MISMATCH"
+            case "$pv_sequence" in OK|"NO ACTIVE MANAGED DISK-N") ;; *) pv_notes="$pv_notes; $pv_sequence" ;; esac
+        elif [ "$pv_sequence" = "NO ACTIVE MANAGED DISK-N" ]; then
+            pv_head_color="$C_CYAN"; pv_notes="$pv_sequence"
+        elif [ "$pv_sequence" != "OK" ]; then
+            pv_head_color="$C_YELLOW"; pv_notes="$pv_sequence"
+        fi
+
+        printf '\n%s%sVM %s%s  %s(%s) %s%s  [%s%s%s]\n' \
+            "$C_BOLD" "$pv_head_color" "$pv_id" "$C_RESET" "$C_CYAN" "$pv_type" "$pv_name" "$C_RESET" \
+            "$pv_head_color" "$pv_notes" "$C_RESET"
+        printf '  %-10s %-40s %-7s %-9s %-8s %s\n' SLOT LVM_PATH FAMILY LV_VMID DISK STATUS
+
+        awk -F'|' -v id="$pv_id" '$1==id' "$REFS_FILE" | while IFS='|' read -r \
+            pr_id pr_type pr_name pr_slot pr_volid pr_uuid pr_path pr_lvname pr_family pr_embedded pr_disk; do
+
+            pr_color="$C_CYAN"; pr_status="UNMANAGED"
+            if [ "$pr_embedded" != "-" ]; then
+                if [ "$pr_embedded" != "$pv_id" ]; then
+                    pr_color="$C_RED"; pr_status="VMID != $pv_id"
+                elif [ "$pr_slot" != "${pr_slot#unused}" ]; then
+                    pr_color="$C_CYAN"; pr_status="UNUSED"
+                elif [ "$pv_sequence" != "OK" ]; then
+                    pr_color="$C_YELLOW"; pr_status="NUMBERING"
+                else
+                    pr_color="$C_GREEN"; pr_status="OK"
+                fi
+            fi
+            printf '  %-10s %s%-40s%s %-7s %-9s %-8s %s%s%s\n' \
+                "$pr_slot" "$pr_color" "$pr_path" "$C_RESET" "$pr_family" "$pr_embedded" "$pr_disk" \
+                "$pr_color" "$pr_status" "$C_RESET"
+        done
+    done
+    return 0
+}
+
+print_remaining_lvs() {
+    section "Remaining LVM volumes"
+    printf '%-40s %-12s %-16s %-16s %s\n' LVM_PATH SIZE POOL ORIGIN STATUS
+    prl_count=0
+    while IFS='|' read -r prl_uuid prl_path prl_vg prl_lv prl_size prl_pool prl_origin; do
+        if awk -F'|' -v u="$prl_uuid" '$6==u {found=1; exit} END {exit(found ? 0 : 1)}' "$REFS_FILE"; then continue; fi
+        [ -n "$prl_pool" ] || prl_pool="-"; [ -n "$prl_origin" ] || prl_origin="-"
+        prl_color="$C_CYAN"; prl_status="UNREFERENCED"
+        if managed_name_fields "$prl_lv" >/dev/null 2>&1; then prl_color="$C_YELLOW"; prl_status="UNREFERENCED MANAGED"; fi
+        printf '%s%-40s%s %-12s %-16s %-16s %s%s%s\n' \
+            "$prl_color" "$prl_path" "$C_RESET" "$prl_size" "$prl_pool" "$prl_origin" "$prl_color" "$prl_status" "$C_RESET"
+        prl_count=$((prl_count + 1))
+    done < "$ALL_LVS_FILE"
+    [ "$prl_count" -gt 0 ] || printf '%s\n' "(none)"
+    return 0
+}
+
+############################################################
+# GENERAL HELPERS
+############################################################
+
+cleanup_files() {
+    [ -z "$ALL_LVS_FILE" ] || rm -f "$ALL_LVS_FILE"
+    [ -z "$REFS_FILE" ] || rm -f "$REFS_FILE"
 }
 
 ############################################################

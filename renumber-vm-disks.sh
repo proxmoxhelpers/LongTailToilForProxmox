@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.1"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
     PLAN_FILE=""
     parse_arguments "$@"
     check_elevation
@@ -416,7 +416,11 @@ end() {
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <vmid> [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    printf 'Usage: %s <vmid> [dryrun]\n' "$(basename "$0")"
+    printf 'Renumber configured vm-ID-disk-N / base-ID-disk-N namespaces without changing prefix or embedded ID.\n'
+    dryrun_help
+}
 
 parse_arguments() {
     pa_count=0
@@ -448,8 +452,9 @@ validate_vm() {
 # build_renumber_plan
 #
 # Description:
-#   Resolves every vm-VMID-disk-N reference into an immutable transaction
-#   plan. The plan replaces Bash arrays and is fully built before mutation.
+#   Resolves every vm-VMID-disk-N and base-VMID-disk-N reference into an
+#   immutable transaction plan, preserving each volume family. The plan
+#   replaces Bash arrays and is fully built before mutation.
 #
 # Usage:
 #   build_renumber_plan
@@ -470,21 +475,40 @@ build_renumber_plan() {
     register_temp_file "$PLAN_FILE"
     brp_volids="$(mktemp)" || die "Unable to create volume list."
     register_temp_file "$brp_volids"
-    grep -oE "[A-Za-z0-9_.-]+:vm-${VMID}-disk-[0-9]+" "$CONFIG" |
-        awk '{n=$0; sub(/^.*-disk-/,"",n); print n "|" $0}' |
-        sort -t'|' -k1,1n -k2,2 -u |
-        cut -d'|' -f2- > "$brp_volids"
-    if [ ! -s "$brp_volids" ]; then rm -f "$brp_volids"; CHANGES=0; info "No vm-${VMID}-disk-N volumes found."; return 0; fi
 
-    brp_i=0; CHANGES=0
+    grep -oE "[A-Za-z0-9_.-]+:(vm|base)-[0-9]+-disk-[0-9]+" "$CONFIG" |
+        awk '{
+            v=$0; sub(/^.*:/,"",v)
+            ns=v; sub(/-disk-[0-9]+$/,"",ns)
+            n=v; sub(/^.*-disk-/,"",n)
+            print ns "|" n "|" $0
+        }' |
+        sort -t'|' -k1,1 -k2,2n -k3,3 -u |
+        cut -d'|' -f3- > "$brp_volids"
+
+    if [ ! -s "$brp_volids" ]; then
+        rm -f "$brp_volids"; CHANGES=0
+        info "No configured vm-ID-disk-N or base-ID-disk-N volumes found."
+        return 0
+    fi
+
+    brp_last_namespace=""; brp_i=0; CHANGES=0
     while IFS= read -r brp_volid; do
+        brp_volume="${brp_volid#*:}"
+        brp_namespace="${brp_volume%-disk-*}"
+        case "$brp_namespace" in vm-[0-9]*|base-[0-9]*) ;; *) rm -f "$brp_volids"; die "Unexpected volume in renumber plan: $brp_volid" ;; esac
+        if [ "$brp_namespace" != "$brp_last_namespace" ]; then brp_i=0; brp_last_namespace="$brp_namespace"; fi
+
         brp_path="$(pvesm path "$brp_volid" 2>/dev/null || :)"; [ -n "$brp_path" ] || { rm -f "$brp_volids"; die "Cannot resolve $brp_volid."; }
         lvs "$brp_path" >/dev/null 2>&1 || { rm -f "$brp_volids"; die "$brp_volid is not LVM-backed."; }
+        brp_refs="$(other_volume_references "$brp_volid" "$CONFIG")"
+        [ -z "$brp_refs" ] || { printf '%s\n' "$brp_refs" >&2; rm -f "$brp_volids"; die "Refusing to renumber a shared volume: $brp_volid"; }
+
         brp_vg="$(lvs --noheadings -o vg_name "$brp_path" | trim)"
         brp_old="$(lvs --noheadings -o lv_name "$brp_path" | trim)"
-        brp_new="vm-${VMID}-disk-${brp_i}"
+        brp_new="${brp_namespace}-disk-${brp_i}"
         brp_storage="${brp_volid%%:*}"
-        brp_temp="vm-${VMID}-renumber-temp-$$-${brp_i}"
+        brp_temp="${brp_namespace}-renumber-temp-$$-${brp_i}"
         printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$brp_i" "$brp_volid" "$brp_path" "$brp_vg" "$brp_old" "$brp_new" "$brp_storage" "$brp_temp" >> "$PLAN_FILE"
         [ "$brp_old" = "$brp_new" ] || CHANGES=$((CHANGES + 1))
         brp_i=$((brp_i + 1))
@@ -555,6 +579,8 @@ verify_renumber() {
     else qm config "$VMID" >/dev/null || die "Proxmox cannot parse the updated config. Backup: $BACKUP"; fi
     ok "Renumbered $CHANGES volume(s). VM remains stopped."
 }
+
+# Handles both vm-VMID-disk-N and base-VMID-disk-N families independently.
 
 ############################################################
 # START

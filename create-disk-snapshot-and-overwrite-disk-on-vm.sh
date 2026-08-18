@@ -493,17 +493,19 @@ resolve_vm_disk_slot() {
             return 0
             ;;
     esac
+
     rvds_num="$(normalize_disk_number "$rvds_selector" 2>/dev/null || :)"
     [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an exact QEMU disk slot."
-    rvds_name="vm-${rvds_vm}-disk-${rvds_num}"
-    rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v name="$rvds_name" '
+
+    rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v n="$rvds_num" '
         $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
             split($2,a,","); v=a[1]; sub(/^[^:]+:/,"",v)
-            if (v == name) print $1
+            if (v ~ "^(vm|base)-[0-9]+-disk-" n "$") print $1
         }')"
     rvds_count="$(printf '%s\n' "$rvds_slots" | awk 'NF {n++} END {print n+0}')"
-    [ "$rvds_count" -gt 0 ] || die "VM $rvds_vm has no configured backing volume named $rvds_name."
-    [ "$rvds_count" -eq 1 ] || { printf '%s\n' "$rvds_slots" >&2; die "$rvds_name matches multiple VM slots."; }
+
+    [ "$rvds_count" -gt 0 ] || die "VM $rvds_vm has no configured vm/base backing volume with disk number $rvds_num."
+    [ "$rvds_count" -eq 1 ] || { printf '%s\n' "$rvds_slots" >&2; die "Disk number $rvds_num matches multiple VM slots; use an explicit source slot."; }
     printf '%s\n' "$rvds_slots" | awk 'NF {print; exit}'
 }
 
@@ -641,15 +643,15 @@ restore_source_state() {
 # resolve_destination
 # Resolves either full LV path or VMID + disk selector to one active QEMU slot.
 # select_free_destination_disk_number VG
-# Selects the next physically/configuration-free vm-DESTVM-disk-N name.
+# Selects the next free managed disk number and uses the destination family.
 select_free_destination_disk_number() {
     sfdn_vg="$1"
-    sfdn_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "vm-${DEST_VM}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    sfdn_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
     if [ -n "$sfdn_highest" ]; then sfdn_num=$((sfdn_highest + 1)); else sfdn_num=0; fi
     while :; do
-        sfdn_name="vm-${DEST_VM}-disk-${sfdn_num}"
+        sfdn_name="${DEST_PREFIX}-${DEST_VM}-disk-${sfdn_num}"
         sfdn_busy=0
-        printf '%s\n' "$DEST_CONFIG" | grep -qF "$sfdn_name" && sfdn_busy=1 || :
+        printf '%s\n' "$DEST_CONFIG" | grep -qE "(vm|base)-[0-9]+-disk-${sfdn_num}([,[:space:]]|$)" && sfdn_busy=1 || :
         lvs "${sfdn_vg}/${sfdn_name}" >/dev/null 2>&1 && sfdn_busy=1 || :
         [ "$sfdn_busy" -eq 0 ] && break
         sfdn_num=$((sfdn_num + 1))
@@ -660,6 +662,7 @@ select_free_destination_disk_number() {
 
 resolve_destination() {
     DEST_EXISTS=1
+    DEST_PREFIX="vm"
 
     if [ "$DEST_FORM" = "path" ]; then
         assert_lv_exists "$DEST_INPUT"
@@ -683,10 +686,12 @@ resolve_destination() {
         DEST_VM="${rd_refs%%|*}"; rd_rest="${rd_refs#*|}"; DEST_SLOT="${rd_rest%%|*}"; DEST_OLD_VOLID="${rd_rest#*|}"
         require_qemu_vm "$DEST_VM"
         DEST_CONFIG="$(qm config "$DEST_VM")"
+        if printf '%s\n' "$DEST_CONFIG" | grep -qE '^template:[[:space:]]*1([[:space:]]|$)'; then DEST_PREFIX="base"; fi
     else
         DEST_VM="$DEST_VM_INPUT"
         require_qemu_vm "$DEST_VM"
         DEST_CONFIG="$(qm config "$DEST_VM")"
+        if printf '%s\n' "$DEST_CONFIG" | grep -qE '^template:[[:space:]]*1([[:space:]]|$)'; then DEST_PREFIX="base"; fi
 
         if rd_kind="$(destination_selector_kind "$DEST_SELECTOR" 2>/dev/null)"; then :
         else die "Destination selector must be N, disk-N, an exact QEMU disk slot, or ide/sata/scsi/virtio."; fi
@@ -705,18 +710,21 @@ resolve_destination() {
             disk)
                 rd_num="$(normalize_disk_number "$DEST_SELECTOR")"
                 DEST_DISK_NUMBER="$rd_num"
-                rd_name="vm-${DEST_VM}-disk-${rd_num}"
-                rd_slots="$(printf '%s\n' "$DEST_CONFIG" | awk -F': ' -v name="$rd_name" '
+                rd_slots="$(printf '%s\n' "$DEST_CONFIG" | awk -F': ' -v n="$rd_num" '
                     $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
                         split($2,a,","); v=a[1]; sub(/^[^:]+:/,"",v)
-                        if (v == name) print $1
+                        if (v ~ "^(vm|base)-[0-9]+-disk-" n "$") print $1
                     }')"
                 rd_count="$(printf '%s\n' "$rd_slots" | awk 'NF {n++} END {print n+0}')"
+                if [ "$rd_count" -gt 1 ]; then
+                    printf '%s\n' "$rd_slots" >&2
+                    die "Disk number $rd_num matches multiple destination VM slots; use an explicit destination slot."
+                fi
                 if [ "$rd_count" -eq 0 ]; then
                     DEST_EXISTS=0
                     DEST_SLOT="$(first_free_scsi "$DEST_VM")" || die "VM $DEST_VM has no free SCSI slot for the new disk."
                 else
-                    [ "$rd_count" -eq 1 ] || { printf '%s\n' "$rd_slots" >&2; die "$rd_name matches multiple VM slots."; }
+                    [ "$rd_count" -eq 1 ] || { printf '%s\n' "$rd_slots" >&2; die "Disk number $rd_num matches multiple destination VM slots."; }
                     DEST_SLOT="$(printf '%s\n' "$rd_slots" | awk 'NF {print; exit}')"
                 fi
                 ;;
@@ -736,7 +744,7 @@ resolve_destination() {
         DEST_VG="$SOURCE_VG"
         DEST_OLD_POOL="$SOURCE_POOL"
         if [ -z "${DEST_DISK_NUMBER:-}" ]; then select_free_destination_disk_number "$DEST_VG"
-        else DEST_OLD_LV="vm-${DEST_VM}-disk-${DEST_DISK_NUMBER}"; fi
+        else DEST_OLD_LV="${DEST_PREFIX}-${DEST_VM}-disk-${DEST_DISK_NUMBER}"; fi
         return 0
     fi
 
@@ -760,8 +768,13 @@ resolve_destination() {
     DEST_OLD_POOL="$(lvs --noheadings -o pool_lv "$DEST_OLD_PATH" 2>/dev/null | trim)"
     [ -n "$DEST_VG" ] && [ -n "$DEST_OLD_LV" ] || die "Destination disk is not LVM-backed."
     DEST_OLD_STORAGE_ID="${DEST_OLD_VOLID%%:*}"
-    DEST_DISK_NUMBER="$(printf '%s\n' "$DEST_OLD_LV" | sed -n "s/^vm-${DEST_VM}-disk-\\([0-9][0-9]*\\)$/\\1/p")"
-    [ -n "$DEST_DISK_NUMBER" ] || die "Destination LV must use the standard vm-${DEST_VM}-disk-N naming scheme."
+    case "$DEST_OLD_LV" in
+        vm-*-disk-*) DEST_PREFIX="vm" ;;
+        base-*-disk-*) DEST_PREFIX="base" ;;
+        *) die "Destination LV must use a managed vm-VMID-disk-N or base-VMID-disk-N naming scheme." ;;
+    esac
+    DEST_DISK_NUMBER="${DEST_OLD_LV##*-disk-}"
+    case "$DEST_DISK_NUMBER" in ''|*[!0-9]*) die "Could not determine destination disk number from $DEST_OLD_LV." ;; esac
 }
 
 # apply_destination_state
@@ -1110,7 +1123,7 @@ verify_destination_boot_first() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.3.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
@@ -1184,7 +1197,7 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path.
-  <source-vmid> disk-N  Resolve a standard backing volume.
+  <source-vmid> disk-N  Resolve a managed vm-/base- backing volume.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
   Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
 
@@ -1264,11 +1277,11 @@ parse_arguments() {
 ############################################################
 
 # select_archive_name
-# Reserves vm-DESTVMID-disk-901 or the next free number for the displaced disk.
+# Reserves PREFIX-DESTVMID-disk-901 or the next free number for the displaced disk.
 select_archive_name() {
     san_number=901
     while :; do
-        ARCHIVE_LV_NAME="vm-${DEST_VM}-disk-${san_number}"
+        ARCHIVE_LV_NAME="${DEST_PREFIX}-${DEST_VM}-disk-${san_number}"
         ARCHIVE_LV_PATH="/dev/${DEST_VG}/${ARCHIVE_LV_NAME}"
         ARCHIVE_VOLID="${DEST_OLD_STORAGE_ID}:${ARCHIVE_LV_NAME}"
         san_busy=0
@@ -1281,10 +1294,10 @@ select_archive_name() {
 }
 
 # select_new_disk_name
-# Chooses a collision-free vm-DESTVMID-disk-N snapshot name in SOURCE_VG.
+# Chooses a collision-free PREFIX-DESTVMID-disk-N snapshot name in SOURCE_VG.
 select_new_disk_name() {
     NEW_VG="$SOURCE_VG"
-    FINAL_LV_NAME="$DEST_OLD_LV"
+    FINAL_LV_NAME="${DEST_PREFIX}-${DEST_VM}-disk-${DEST_DISK_NUMBER}"
     FINAL_LV_PATH="/dev/${NEW_VG}/${FINAL_LV_NAME}"
     FINAL_VOLID="${STORAGE_ID}:${FINAL_LV_NAME}"
 
@@ -1296,10 +1309,10 @@ select_new_disk_name() {
         if guest_volume_references | grep -F "|$FINAL_VOLID" >/dev/null 2>&1; then die "Cannot create disk-$DEST_DISK_NUMBER: $FINAL_VOLID is already referenced by a guest configuration."; fi
     fi
 
-    snd_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "vm-${DEST_VM}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    snd_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
     if [ -n "$snd_highest" ]; then TEMP_DISK_NUMBER=$((snd_highest + 1)); else TEMP_DISK_NUMBER=0; fi
     while :; do
-        TEMP_LV_NAME="vm-${DEST_VM}-disk-${TEMP_DISK_NUMBER}"
+        TEMP_LV_NAME="${DEST_PREFIX}-${DEST_VM}-disk-${TEMP_DISK_NUMBER}"
         [ "$TEMP_LV_NAME" = "$FINAL_LV_NAME" ] && { TEMP_DISK_NUMBER=$((TEMP_DISK_NUMBER + 1)); continue; }
         TEMP_LV_PATH="/dev/${NEW_VG}/${TEMP_LV_NAME}"
         TEMP_VOLID="${STORAGE_ID}:${TEMP_LV_NAME}"
@@ -1331,6 +1344,7 @@ print_plan() {
     printf 'Destination state mode: %s\n' "$MODE"
     printf 'Destination slot:       %s\n' "$DEST_SLOT"
     printf 'Target disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
+    printf 'Managed-volume family:  %s\n' "$DEST_PREFIX"
 
     if [ "$DEST_EXISTS" -eq 1 ]; then
         printf 'Old volume:             %s\n' "$DEST_OLD_VOLID"
@@ -1491,7 +1505,7 @@ verify_result() {
     fi
 
     [ "$(disk_volid "$DEST_VM" "$DEST_SLOT")" = "$FINAL_VOLID" ] || die "Destination slot verification failed."
-    [ "$NEW_LV_NAME" = "vm-${DEST_VM}-disk-${DEST_DISK_NUMBER}" ] || die "Result did not retain the requested destination disk number."
+    [ "$NEW_LV_NAME" = "${DEST_PREFIX}-${DEST_VM}-disk-${DEST_DISK_NUMBER}" ] || die "Result did not retain the requested destination managed-volume name."
 
     if [ "$DEST_EXISTS" -eq 1 ]; then
         if [ "$DELETE_OLD" -eq 1 ]; then

@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
     CANDIDATE_FILE=""; PLAN_FILE=""
     parse_arguments "$@"
     check_elevation
@@ -401,9 +401,11 @@ main() {
     need_commands qm pvesm lvs lvrename cp sed grep sort mktemp
     require_qemu_vm "$VMID"; require_guest_stopped "$VMID"
     CONFIG="/etc/pve/qemu-server/${VMID}.conf"
+    VM_IS_TEMPLATE=0
+    qm config "$VMID" | grep -qE '^template:[[:space:]]*1([[:space:]]|$)' && VM_IS_TEMPLATE=1 || :
     collect_candidates
     build_fix_plan
-    [ "$FIX_COUNT" -gt 0 ] || { ok "All LVM-backed VM volumes already use vm-${VMID}-disk-N names."; return 0; }
+    [ "$FIX_COUNT" -gt 0 ] || { ok "All LVM-backed VM volumes already use vm-${VMID}-disk-N or base-${VMID}-disk-N names."; return 0; }
     apply_fix_plan
     verify_fix
 }
@@ -418,7 +420,12 @@ end() {
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <vmid> [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    printf 'Usage: %s <vmid> [dryrun]\n' "$(basename "$0")"
+    printf 'Correct mismatched vm-ID-disk-N / base-ID-disk-N backing names while preserving family and disk-N.\n'
+    printf 'Includes normal disks, unusedN, efidiskN and tpmstateN references. Exact managed-name collisions are refused.\n'
+    dryrun_help
+}
 
 parse_arguments() {
     pa_count=0
@@ -443,14 +450,15 @@ parse_arguments() {
 collect_candidates() {
     CANDIDATE_FILE="$(mktemp)" || die "Unable to create candidate list."
     register_temp_file "$CANDIDATE_FILE"
-    qm config "$VMID" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {split($2,a,","); if (a[1] ~ /:/) print a[1]}' | sort -u > "$CANDIDATE_FILE"
+    qm config "$VMID" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ {split($2,a,","); if (a[1] ~ /:/) print a[1]}' | sort -u > "$CANDIDATE_FILE"
 }
 
 # build_fix_plan
 #
 # Description:
-#   Plans all mismatched LVM-backed volume renames before mutation and chooses
-#   destination vm-VMID-disk-N names that do not collide in the VG.
+#   Plans all mismatched LVM-backed volume renames before mutation. Existing
+#   vm/base volume families are preserved; otherwise templates use base- and
+#   normal VMs use vm-. Destination names are collision checked in the VG.
 #
 # Usage:
 #   build_fix_plan
@@ -468,28 +476,78 @@ collect_candidates() {
 build_fix_plan() {
     PLAN_FILE="$(mktemp)" || die "Unable to create volume-name plan."
     register_temp_file "$PLAN_FILE"
-    bf_max=-1
+    bf_vm_max=-1; bf_base_max=-1
+
     while IFS= read -r bf_volid; do
         bf_name="${bf_volid#*:}"
         if printf '%s\n' "$bf_name" | grep -qE "^vm-${VMID}-disk-[0-9]+$"; then
-            bf_num="${bf_name##*-disk-}"
-            [ "$bf_num" -le "$bf_max" ] || bf_max="$bf_num"
+            bf_num="${bf_name##*-disk-}"; [ "$bf_num" -le "$bf_vm_max" ] || bf_vm_max="$bf_num"
+        elif printf '%s\n' "$bf_name" | grep -qE "^base-${VMID}-disk-[0-9]+$"; then
+            bf_num="${bf_name##*-disk-}"; [ "$bf_num" -le "$bf_base_max" ] || bf_base_max="$bf_num"
         fi
     done < "$CANDIDATE_FILE"
-    bf_next=$((bf_max + 1)); FIX_COUNT=0
+    bf_vm_next=$((bf_vm_max + 1)); bf_base_next=$((bf_base_max + 1)); FIX_COUNT=0
 
     while IFS= read -r bf_volid; do
         [ -n "$bf_volid" ] || continue
         bf_name="${bf_volid#*:}"
-        printf '%s\n' "$bf_name" | grep -qE "^vm-${VMID}-disk-[0-9]+$" && continue
+        if printf '%s\n' "$bf_name" | grep -qE "^(vm|base)-${VMID}-disk-[0-9]+$"; then continue; fi
+
+        case "$bf_name" in
+            base-*-disk-*) bf_family="base" ;;
+            vm-*-disk-*) bf_family="vm" ;;
+            *) if [ "$VM_IS_TEMPLATE" -eq 1 ]; then bf_family="base"; else bf_family="vm"; fi ;;
+        esac
+
         bf_path="$(pvesm path "$bf_volid" 2>/dev/null || :)"; [ -n "$bf_path" ] || continue
         lvs "$bf_path" >/dev/null 2>&1 || { warn "Skipping non-LVM volume $bf_volid"; continue; }
         bf_refs="$(other_volume_references "$bf_volid" "$CONFIG")"
         [ -z "$bf_refs" ] || { printf '%s\n' "$bf_refs"; die "$bf_volid is referenced by another guest."; }
         bf_vg="$(lvs --noheadings -o vg_name "$bf_path" | trim)"
         bf_old="$(lvs --noheadings -o lv_name "$bf_path" | trim)"
-        while lvs "$bf_vg/vm-${VMID}-disk-${bf_next}" >/dev/null 2>&1; do bf_next=$((bf_next + 1)); done
-        bf_new="vm-${VMID}-disk-${bf_next}"; bf_next=$((bf_next + 1))
+
+        bf_preferred_num=""
+        case "$bf_name" in
+            vm-*-disk-*|base-*-disk-*)
+                bf_preferred_num="${bf_name##*-disk-}"
+                case "$bf_preferred_num" in ''|*[!0-9]*) bf_preferred_num="" ;; esac
+                ;;
+        esac
+
+        if [ -n "$bf_preferred_num" ]; then
+            bf_new="${bf_family}-${VMID}-disk-${bf_preferred_num}"
+            if lvs "$bf_vg/$bf_new" >/dev/null 2>&1; then
+                die "Corrected destination LV already exists: /dev/${bf_vg}/${bf_new}"
+            fi
+            if awk -F'|' -v vg="$bf_vg" -v name="$bf_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
+                die "Multiple source volumes would map to /dev/${bf_vg}/${bf_new}; refusing to change disk numbers implicitly."
+            fi
+            if [ "$bf_family" = "base" ] && [ "$bf_preferred_num" -ge "$bf_base_next" ]; then bf_base_next=$((bf_preferred_num + 1)); fi
+            if [ "$bf_family" = "vm" ] && [ "$bf_preferred_num" -ge "$bf_vm_next" ]; then bf_vm_next=$((bf_preferred_num + 1)); fi
+        elif [ "$bf_family" = "base" ]; then
+            bf_next="$bf_base_next"
+            while :; do
+                bf_new="base-${VMID}-disk-${bf_next}"
+                if lvs "$bf_vg/$bf_new" >/dev/null 2>&1; then bf_next=$((bf_next + 1)); continue; fi
+                if awk -F'|' -v vg="$bf_vg" -v name="$bf_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
+                    bf_next=$((bf_next + 1)); continue
+                fi
+                break
+            done
+            bf_base_next=$((bf_next + 1))
+        else
+            bf_next="$bf_vm_next"
+            while :; do
+                bf_new="vm-${VMID}-disk-${bf_next}"
+                if lvs "$bf_vg/$bf_new" >/dev/null 2>&1; then bf_next=$((bf_next + 1)); continue; fi
+                if awk -F'|' -v vg="$bf_vg" -v name="$bf_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
+                    bf_next=$((bf_next + 1)); continue
+                fi
+                break
+            done
+            bf_vm_next=$((bf_next + 1))
+        fi
+
         bf_new_volid="${bf_volid%%:*}:$bf_new"
         printf '%s|%s|%s|%s|%s\n' "$bf_volid" "$bf_new_volid" "$bf_vg" "$bf_old" "$bf_new" >> "$PLAN_FILE"
         FIX_COUNT=$((FIX_COUNT + 1))
@@ -519,6 +577,8 @@ verify_fix() {
     else qm config "$VMID" >/dev/null || die "Config verification failed. Backup: $BACKUP"; fi
     ok "Renamed $FIX_COUNT volume(s). Backup: $BACKUP"
 }
+
+# Preserves vm-/base- family while correcting embedded VMIDs and disk numbers.
 
 ############################################################
 # START

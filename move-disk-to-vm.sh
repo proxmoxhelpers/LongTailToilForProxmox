@@ -388,7 +388,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="1.0.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
     MODE="hot"; MODE_ARG=""; ARG1=""; ARG2=""; ARG3=""; ARG_COUNT=0
     REFS_FILE=""; SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_VALUE=""; SOURCE_VOLID=""; SOURCE_ACTIVE=0
     SOURCE_STATUS=""; SOURCE_UNUSED=""; DEST_SLOT=""; DEST_TOUCHED=0; DEST_ATTACHED=0; SOURCE_DETACHED=0
@@ -444,7 +444,7 @@ DESCRIPTION
   Moves an existing LVM-backed QEMU disk reference to another QEMU VM without
   copying or renaming the LV. The destination uses its first free SCSI slot.
 
-  The numeric disk form selects the backing volume named vm-SOURCE-disk-N.
+  The numeric disk form selects a managed backing volume vm-SOURCE-disk-N or base-SOURCE-disk-N; stale embedded IDs are accepted only when the disk number is otherwise unambiguous.
   An explicit source slot such as scsi0, sata1, virtio2, or unused0 is also
   accepted.
 
@@ -550,21 +550,21 @@ resolve_source_by_path() {
 }
 
 # resolve_source_by_vm
-# Resolves a numeric vm-SOURCE-disk-N selector or explicit QEMU disk slot.
+# Resolves a numeric managed-volume disk-N selector (vm/base) or explicit QEMU disk slot.
 resolve_source_by_vm() {
     require_qemu_vm "$SOURCE_VM"
     case "$DISK_SELECTOR" in
         scsi[0-9]*|sata[0-9]*|virtio[0-9]*|ide[0-9]*|unused[0-9]*) SOURCE_SLOT="$DISK_SELECTOR" ;;
         ''|*[!0-9]*) die "Disk selector must be a numeric backing-disk number or a QEMU disk slot." ;;
         *)
-            rsbv_slots="$(qm config "$SOURCE_VM" | awk -F': ' -v id="$SOURCE_VM" -v n="$DISK_SELECTOR" '
+            rsbv_slots="$(qm config "$SOURCE_VM" | awk -F': ' -v n="$DISK_SELECTOR" '
                 $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
                     split($2,a,","); v=a[1]; sub(/^[^:]+:/,"",v)
-                    if (v == "vm-" id "-disk-" n) print $1
+                    if (v ~ "^(vm|base)-[0-9]+-disk-" n "$") print $1
                 }')"
             rsbv_count="$(printf '%s\n' "$rsbv_slots" | awk 'NF {n++} END {print n+0}')"
-            [ "$rsbv_count" -gt 0 ] || die "VM $SOURCE_VM has no configured LVM disk named vm-${SOURCE_VM}-disk-${DISK_SELECTOR}."
-            [ "$rsbv_count" -eq 1 ] || { printf '%s\n' "$rsbv_slots" >&2; die "Disk number $DISK_SELECTOR matches multiple VM slots."; }
+            [ "$rsbv_count" -gt 0 ] || die "VM $SOURCE_VM has no configured vm/base backing volume with disk number $DISK_SELECTOR."
+            [ "$rsbv_count" -eq 1 ] || { printf '%s\n' "$rsbv_slots" >&2; die "Disk number $DISK_SELECTOR matches multiple VM slots; use an explicit source slot."; }
             SOURCE_SLOT="$(printf '%s\n' "$rsbv_slots" | awk 'NF {print; exit}')"
             ;;
     esac

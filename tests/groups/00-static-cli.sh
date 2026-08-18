@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"
-    TEST_SUITE_VERSION="2.4.0"
+    PROJECT_VERSION="3.4.2"
+    TEST_SUITE_VERSION="2.8.0"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -31,6 +31,21 @@ main() {
     run_case "Overwrite helpers use UUID-safe rollback" test_overwrite_uuid_safe_rollback
     run_case "Overwrite helpers support empty destination disk numbers" test_overwrite_empty_target_contract
     run_case "Create helpers expose device selectors and boot keyword" test_create_device_boot_contract
+    run_case "Managed volume naming supports vm and base families" test_managed_volume_family_contract
+    run_case "Inspection helpers expose numbering and filesystem contracts" test_inspection_helper_contract
+    run_case "Active numbering detects gaps/duplicates and ignores unused archives" test_numbering_sequence_contract
+    run_case "Partition table intent is compared by compatible filesystem family" test_partition_format_contract
+    run_case "Managed disk-number selectors reject configured ambiguity" test_managed_selector_ambiguity_contract
+    run_case "Test cleanup refuses unowned VM storage references" test_cleanup_storage_ownership_contract
+    run_case "Dry-run snapshots include VM state and LV content samples" test_dryrun_snapshot_strength_contract
+    run_case "Regular LVM copy path never uses sparse writes" test_regular_copy_non_sparse_contract
+    run_case "Negative/refusal helper proves state is unchanged" test_refusal_helper_contract
+    run_case "Every public command has an integration reference" test_integration_reference_contract
+    run_case "Every mutating command has a dry-run immutability case" test_mutating_dryrun_coverage_contract
+    run_case "README and test matrix cover every public command exactly once" test_public_documentation_coverage_contract
+    run_case "LXC cleanup uses exact identity and owned-storage guards" test_ct_cleanup_safety_contract
+    run_case "Protected baseline includes guest runtime and firewall state" test_protected_runtime_contract
+    run_case "Cleanup fails closed between guest/storage/VG layers" test_layered_cleanup_contract
     run_case "--version for all project commands" test_all_versions
     run_case "--help for all project commands" test_all_help
     run_case "dryrun before --version for all commands" test_all_dryrun_prefix
@@ -98,13 +113,17 @@ finish_static_run() {
 print_plan() {
     print_banner "Static / CLI tests"
     printf '%s\n' "No test has been executed. Re-run with --run to:"
-    printf '%s\n' "  - parse all 40 v3 commands and canonical maintenance libraries with /bin/sh"
+    printf '%s\n' "  - parse all 42 v3 commands and canonical maintenance libraries with /bin/sh"
     printf '%s\n' "  - prove each top-level command runs help/version when copied completely alone"
     printf '%s\n' "  - require /bin/sh entry-point shebangs and reject known Bash-only constructs"
     printf '%s\n' "  - test --version and --help without root/Proxmox preflight"
     printf '%s\n' "  - test dryrun keyword parsing before and after --version"
     printf '%s\n' "  - verify the v3 style-guide documents are packaged"
     printf '%s\n' "  - verify shared helper and test-runner regression contracts"
+    printf '%s\n' "  - verify vm-VMID-disk-N and base-VMID-disk-N managed-volume support"
+    printf '%s\n' "  - verify cleanup refuses unowned storage references on disposable VMs"
+    printf '%s\n' "  - verify dry-run/refusal snapshots include runtime state and LV byte samples"
+    printf '%s\n' "  - enforce non-sparse writes for regular-LV copy destinations"
 }
 
 ############################################################
@@ -115,7 +134,7 @@ print_plan() {
 test_all_script_syntax() {
     tas_count=0
     for tas_script in "$PROJECT_ROOT"/*.sh; do sh -n "$tas_script"; tas_count=$((tas_count + 1)); done
-    [ "$tas_count" -eq 40 ] || { printf 'Expected 40 project commands, found %s.\n' "$tas_count" >&2; return 1; }
+    [ "$tas_count" -eq 42 ] || { printf 'Expected 42 project commands, found %s.\n' "$tas_count" >&2; return 1; }
     for tas_lib in "$PROJECT_ROOT"/lib/*.sh; do sh -n "$tas_lib"; done
 }
 
@@ -146,7 +165,7 @@ test_all_standalone() {
 
         (cd "$tas_dir" && /bin/sh "./$tas_name" --help >/dev/null)
         tas_version="$(cd "$tas_dir" && /bin/sh "./$tas_name" --version)"
-        printf '%s\n' "$tas_version" | grep -F "(project 3.3.0)" >/dev/null || return 1
+        printf '%s\n' "$tas_version" | grep -F "(project $PROJECT_VERSION)" >/dev/null || return 1
     done
 }
 
@@ -259,11 +278,288 @@ test_create_device_boot_contract() {
     return 0
 }
 
+# Verifies every command family that interprets Proxmox-managed LVM names knows
+# both vm-VMID-disk-N and base-VMID-disk-N where that distinction is material.
+test_managed_volume_family_contract() {
+    tmvfc_change="$PROJECT_ROOT/change-vmid-of-vm.sh"
+    tmvfc_renumber="$PROJECT_ROOT/renumber-vm-disks.sh"
+    tmvfc_fix="$PROJECT_ROOT/fix-vm-volume-names.sh"
+    tmvfc_orphan="$PROJECT_ROOT/find-orphaned-volumes.sh"
+    tmvfc_recover="$PROJECT_ROOT/recover-vm-from-volumes.sh"
+    tmvfc_move="$PROJECT_ROOT/move-disk-to-vm.sh"
+
+    grep -F ':(vm|base)-${OLD_ID}-' "$tmvfc_change" >/dev/null || return 1
+    grep -F 'bvp_foreign=' "$tmvfc_change" >/dev/null || return 1
+
+    grep -F ':(vm|base)-[0-9]+-disk-[0-9]+' "$tmvfc_renumber" >/dev/null || return 1
+    grep -F 'brp_new="${brp_namespace}-disk-${brp_i}"' "$tmvfc_renumber" >/dev/null || return 1
+    grep -F 'Refusing to renumber a shared volume' "$tmvfc_renumber" >/dev/null || return 1
+
+    grep -F '/^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/' "$tmvfc_fix" >/dev/null || return 1
+    grep -F 'Corrected destination LV already exists' "$tmvfc_fix" >/dev/null || return 1
+    grep -F 'base-${VMID}-disk-' "$tmvfc_fix" >/dev/null || return 1
+
+    grep -F "'^(vm|base)-[0-9]+-disk-[0-9]+$'" "$tmvfc_orphan" >/dev/null || return 1
+    grep -F '"^(vm|base)-"id"-disk-[0-9]+$"' "$tmvfc_recover" >/dev/null || return 1
+    grep -F 'v ~ "^(vm|base)-[0-9]+-disk-" n "$"' "$tmvfc_move" >/dev/null || return 1
+
+    for tmvfc_name in \
+        create-disk-copy-and-add-to-vm.sh \
+        create-disk-snapshot-and-add-to-vm.sh \
+        create-disk-copy-and-overwrite-disk-on-vm.sh \
+        create-disk-snapshot-and-overwrite-disk-on-vm.sh; do
+        tmvfc_script="$PROJECT_ROOT/$tmvfc_name"
+        grep -F 'v ~ "^(vm|base)-[0-9]+-disk-" n "$"' "$tmvfc_script" >/dev/null || return 1
+        grep -F 'DEST_PREFIX="base"' "$tmvfc_script" >/dev/null || return 1
+    done
+    return 0
+}
+
+# Verifies the two v3.4 inspection helpers expose their intended read-only contracts.
+test_inspection_helper_contract() {
+    tih_number="$PROJECT_ROOT/verify-vm-disk-numbering.sh"
+    tih_fs="$PROJECT_ROOT/list-all-vm-lvm-filesystems.sh"
+    [ -f "$tih_number" ] && [ -f "$tih_fs" ] || return 1
+
+    grep -F 'VMID MISMATCH' "$tih_number" >/dev/null || return 1
+    grep -F 'ACTIVE STARTS AT disk-' "$tih_number" >/dev/null || return 1
+    grep -F 'GAP AT disk-' "$tih_number" >/dev/null || return 1
+    grep -F 'DUPLICATE disk-' "$tih_number" >/dev/null || return 1
+    grep -F '$4 !~ /^unused[0-9]+$/' "$tih_number" >/dev/null || return 1
+    grep -F 'base-*-disk-*' "$tih_number" >/dev/null || return 1
+
+    grep -F 'TABLE_HINT' "$tih_fs" >/dev/null || return 1
+    grep -F 'CONTENT_FORMAT' "$tih_fs" >/dev/null || return 1
+    grep -F 'MISMATCH: table says' "$tih_fs" >/dev/null || return 1
+    grep -F 'blkid -p -o value -s TYPE -O' "$tih_fs" >/dev/null || return 1
+    grep -F 'partx --show --raw --noheadings -o NR,START,SECTORS,TYPE' "$tih_fs" >/dev/null || return 1
+    grep -F 'Microsoft reserved|none' "$tih_fs" >/dev/null || return 1
+    grep -F 'Solaris /usr / ZFS|zfs' "$tih_fs" >/dev/null || return 1
+
+    if grep -nE '^[[:space:]]*(kpartx|mount)[[:space:]]' "$tih_fs" >/dev/null 2>&1; then
+        printf '%s performs a state-changing mapping/mount operation.\n' "$(basename "$tih_fs")" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Exercises active numbering analysis without Proxmox/LVM.
+test_numbering_sequence_contract() (
+    tnsc_lib="$TEST_DATA_DIR/verify-numbering-functions.sh"
+    sed '/^# START$/,$d' "$PROJECT_ROOT/verify-vm-disk-numbering.sh" > "$tnsc_lib"
+    . "$tnsc_lib"
+
+    REFS_FILE="$TEST_DATA_DIR/numbering-refs.txt"
+    cat > "$REFS_FILE" <<'EOF'
+100|QEMU|test|scsi0|test:a|u1|/dev/x/a|vm-100-disk-5|vm|100|5
+100|QEMU|test|scsi1|test:b|u2|/dev/x/b|base-100-disk-5|base|100|5
+100|QEMU|test|scsi2|test:c|u3|/dev/x/c|vm-100-disk-7|vm|100|7
+100|QEMU|test|unused0|test:d|u4|/dev/x/d|vm-100-disk-901|vm|100|901
+EOF
+    [ "$(active_numbering_status 100)" = "ACTIVE STARTS AT disk-5; DUPLICATE disk-5; GAP AT disk-6" ]
+)
+
+# Exercises representative GPT/MBR table intent against content signatures.
+test_partition_format_contract() (
+    tpfc_lib="$TEST_DATA_DIR/filesystem-functions.sh"
+    sed '/^# START$/,$d' "$PROJECT_ROOT/list-all-vm-lvm-filesystems.sh" > "$tpfc_lib"
+    . "$tpfc_lib"
+
+    [ "$(table_type_info 0FC63DAF-8483-4772-8E79-3D69D8477DE4)" = "Linux filesystem|linuxfs" ]
+    [ "$(table_type_info EBD0A0A2-B9E5-4433-87C0-68B6B72699C7)" = "Microsoft basic data|microsoft" ]
+    [ "$(table_type_info E3C9E316-0B5C-4DB8-817D-F92DF00215AE)" = "Microsoft reserved|none" ]
+    table_content_match linuxfs ext4
+    table_content_match linuxfs btrfs
+    table_content_match linuxfs crypto_LUKS
+    table_content_match microsoft ntfs
+    table_content_match fat vfat
+    if table_content_match microsoft ext4; then return 1; fi
+    if table_content_match fat btrfs; then return 1; fi
+)
+
+# Prevents exact-current-VMID precedence from hiding a second configured disk-N.
+test_managed_selector_ambiguity_contract() {
+    for tmsa_name in \
+        move-disk-to-vm.sh \
+        create-disk-copy-and-add-to-vm.sh \
+        create-disk-snapshot-and-add-to-vm.sh \
+        create-disk-copy-and-overwrite-disk-on-vm.sh \
+        create-disk-snapshot-and-overwrite-disk-on-vm.sh; do
+        tmsa_script="$PROJECT_ROOT/$tmsa_name"
+        grep -F 'v ~ "^(vm|base)-[0-9]+-disk-" n "$"' "$tmsa_script" >/dev/null || return 1
+        if grep -F 'v == "vm-" id "-disk-" n' "$tmsa_script" >/dev/null 2>&1; then
+            printf '%s still gives exact embedded VMID precedence over configured disk-N ambiguity.\n' "$tmsa_name" >&2
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Prevents command inventory drift between the public tree, README and matrix.
+test_public_documentation_coverage_contract() {
+    tpdc_readme="$PROJECT_ROOT/README.md"
+    tpdc_matrix="$TEST_ROOT/TEST-MATRIX.md"
+    tpdc_count=0
+
+    for tpdc_script in "$PROJECT_ROOT"/*.sh; do
+        tpdc_name="$(basename "$tpdc_script")"
+        tpdc_count=$((tpdc_count + 1))
+
+        [ "$(grep -Fc "#### \`$tpdc_name\`" "$tpdc_readme")" -eq 1 ] || {
+            printf 'README must contain exactly one helper heading for %s.\n' "$tpdc_name" >&2
+            return 1
+        }
+
+        tpdc_wget="wget -q \"https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/$tpdc_name\" -O \"$tpdc_name\" && chmod +x \"$tpdc_name\""
+        [ "$(grep -Fc "$tpdc_wget" "$tpdc_readme")" -eq 1 ] || {
+            printf 'README must contain exactly one standalone wget+chmod line for %s.\n' "$tpdc_name" >&2
+            return 1
+        }
+
+        [ "$(grep -Fc "\`$tpdc_name\`" "$tpdc_matrix")" -eq 1 ] || {
+            printf 'TEST-MATRIX.md must contain exactly one command row for %s.\n' "$tpdc_name" >&2
+            return 1
+        }
+    done
+
+    [ "$tpdc_count" -eq 42 ] || {
+        printf 'Expected 42 public commands, found %s.\n' "$tpdc_count" >&2
+        return 1
+    }
+}
+
+# Ensures cleanup cannot purge a named test VM unless every storage-backed
+# reference still resolves through a test-owned storage mapping.
+test_cleanup_storage_ownership_contract() {
+    tcso_lib="$PROJECT_ROOT/tests/lib/test-common.sh"
+    grep -F 'vm_references_only_test_storage()' "$tcso_lib" >/dev/null || return 1
+    grep -F 'test_storage_mapping_owned()' "$tcso_lib" >/dev/null || return 1
+    grep -F 'Refusing to destroy VM $ctv_id because one or more storage references are not provably test-owned.' "$tcso_lib" >/dev/null || return 1
+
+    tcso_cleanup="$(awk '/^cleanup_test_vms\(\)/,/^}/' "$tcso_lib")"
+    printf '%s\n' "$tcso_cleanup" | grep -F 'vm_references_only_test_storage "$ctv_id"' >/dev/null || return 1
+    printf '%s\n' "$tcso_cleanup" | grep -F 'qm destroy "$ctv_id" --purge 1' >/dev/null || return 1
+
+    tcso_guard_line="$(printf '%s\n' "$tcso_cleanup" | grep -nF 'vm_references_only_test_storage "$ctv_id"' | cut -d: -f1)"
+    tcso_destroy_line="$(printf '%s\n' "$tcso_cleanup" | grep -nF 'qm destroy "$ctv_id" --purge 1' | cut -d: -f1)"
+    [ -n "$tcso_guard_line" ] && [ -n "$tcso_destroy_line" ] && [ "$tcso_guard_line" -lt "$tcso_destroy_line" ]
+}
+
+# Ensures the state snapshots used by every real dry-run include runtime state,
+# sampled LV bytes and full test-data file hashes.
+test_dryrun_snapshot_strength_contract() {
+    tdss_lib="$PROJECT_ROOT/tests/lib/test-common.sh"
+    tdss_body="$(awk '/^snapshot_test_owned_state\(\)/,/^)/' "$tdss_lib")"
+    printf '%s\n' "$tdss_body" | grep -F '[LV-SAMPLES]' >/dev/null || return 1
+    printf '%s\n' "$tdss_body" | grep -F 'sample_lv_content "$stos_lv"' >/dev/null || return 1
+    printf '%s\n' "$tdss_body" | grep -F 'STATUS:%s:%s' >/dev/null || return 1
+    printf '%s\n' "$tdss_body" | grep -F 'sha256sum "$stos_path"' >/dev/null || return 1
+    grep -F 'TEST_BACKUP_BASELINE=' "$tdss_lib" >/dev/null || return 1
+    grep -F 'backup_was_preexisting "$ctb_path"' "$tdss_lib" >/dev/null || return 1
+}
+
+# The critical copy rule: thin destinations may use conv=sparse; regular
+# destinations must issue a full write without sparse skipping.
+test_regular_copy_non_sparse_contract() (
+    trcn_lib="$TEST_DATA_DIR/copy-lvm-functions.sh"
+    sed '/^# START$/,$d' "$PROJECT_ROOT/copy-lvm.sh" > "$trcn_lib"
+    . "$trcn_lib"
+
+    SOURCE_PATH="/dev/test/source"
+    DEST_PATH="/dev/test/destination"
+    dryrun_cmd() { printf '%s\n' "$*"; }
+    info() { :; }
+    ok() { :; }
+
+    DEST_MODE="regular"
+    trcn_regular="$(copy_data)"
+    printf '%s\n' "$trcn_regular" | grep -F 'conv=fsync' >/dev/null || return 1
+    if printf '%s\n' "$trcn_regular" | grep -F 'conv=sparse' >/dev/null; then return 1; fi
+
+    DEST_MODE="thin"
+    trcn_thin="$(copy_data)"
+    printf '%s\n' "$trcn_thin" | grep -F 'conv=sparse,fsync' >/dev/null || return 1
+)
+
+# Verifies the reusable negative-path helper requires failure and compares
+# snapshots on both sides instead of accepting a failed command as sufficient.
+test_refusal_helper_contract() {
+    trhc_lib="$PROJECT_ROOT/tests/lib/test-common.sh"
+    trhc_body="$(awk '/^run_expect_fail_unchanged\(\)/,/^}/' "$trhc_lib")"
+    printf '%s\n' "$trhc_body" | grep -F 'snapshot_test_owned_state "$refu_before"' >/dev/null || return 1
+    printf '%s\n' "$trhc_body" | grep -F 'if project_cmd "$refu_script"' >/dev/null || return 1
+    printf '%s\n' "$trhc_body" | grep -F 'snapshot_test_owned_state "$refu_after"' >/dev/null || return 1
+    printf '%s\n' "$trhc_body" | grep -F 'cmp -s "$refu_before" "$refu_after"' >/dev/null || return 1
+}
+
+# Ensures no public command can silently fall out of the real integration suite.
+test_integration_reference_contract() {
+    tirc_blob="$TEST_DATA_DIR/integration-groups.txt"
+    cat "$PROJECT_ROOT"/tests/groups/[1-9][0-9]-*.sh > "$tirc_blob"
+    for tirc_script in "$PROJECT_ROOT"/*.sh; do
+        tirc_name="$(basename "$tirc_script")"
+        grep -F "$tirc_name" "$tirc_blob" >/dev/null || {
+            printf 'No non-static integration-group reference found for %s.\n' "$tirc_name" >&2
+            return 1
+        }
+    done
+}
+
+# Read-only inventory commands do not need mutation dry-runs. Every other
+# public command must be exercised through the exact-state dry-run helper.
+test_mutating_dryrun_coverage_contract() {
+    tmdc_blob="$TEST_DATA_DIR/integration-groups.txt"
+    cat "$PROJECT_ROOT"/tests/groups/[1-9][0-9]-*.sh > "$tmdc_blob"
+    for tmdc_script in "$PROJECT_ROOT"/*.sh; do
+        tmdc_name="$(basename "$tmdc_script")"
+        case "$tmdc_name" in
+            audit-vm-storage.sh|find-orphaned-volumes.sh|find-volume-owner.sh|list-all-vm-lvm-filesystems.sh|list-all-vm-lvm.sh|list-vm-disks.sh|verify-vm-disk-numbering.sh)
+                continue
+                ;;
+        esac
+        tmdc_pattern="$(printf '%s' "$tmdc_name" | sed 's/[.[\*^$()+?{|]/\\&/g')"
+        grep -E "run_dryrun_unchanged.*${tmdc_pattern}" "$tmdc_blob" >/dev/null || {
+            printf 'Mutating command has no run_dryrun_unchanged integration case: %s\n' "$tmdc_name" >&2
+            return 1
+        }
+    done
+}
+
+test_ct_cleanup_safety_contract() {
+    tcsc_common="$PROJECT_ROOT/tests/lib/test-common.sh"
+    grep -F 'cleanup_test_cts()' "$tcsc_common" >/dev/null || return 1
+    grep -F 'ctc_actual="$(pct config "$ctc_id"' "$tcsc_common" >/dev/null || return 1
+    grep -F 'ct_references_only_test_storage "$ctc_id"' "$tcsc_common" >/dev/null || return 1
+    grep -F 'pct destroy "$ctc_id" --purge 1' "$tcsc_common" >/dev/null || return 1
+    tcsc_guard="$(grep -nF 'ct_references_only_test_storage "$ctc_id"' "$tcsc_common" | head -n1 | cut -d: -f1)"
+    tcsc_destroy="$(grep -nF 'pct destroy "$ctc_id" --purge 1' "$tcsc_common" | head -n1 | cut -d: -f1)"
+    [ "$tcsc_guard" -lt "$tcsc_destroy" ]
+}
+
+test_protected_runtime_contract() {
+    tprc_common="$PROJECT_ROOT/tests/lib/test-common.sh"
+    grep -F '"${cps_prefix}.guest-status"' "$tprc_common" >/dev/null || return 1
+    grep -F '"${cps_prefix}.firewall"' "$tprc_common" >/dev/null || return 1
+    grep -F 'guest-status firewall' "$tprc_common" >/dev/null || return 1
+    grep -F 'qm status "$cps_id"' "$tprc_common" >/dev/null || return 1
+    grep -F 'pct status "$cps_id"' "$tprc_common" >/dev/null || return 1
+}
+
+test_layered_cleanup_contract() {
+    tlcc_common="$PROJECT_ROOT/tests/lib/test-common.sh"
+    grep -F 'owned_guest_configs_remain' "$tlcc_common" >/dev/null || return 1
+    grep -F 'refusing storage/VG cleanup' "$tlcc_common" >/dev/null || return 1
+    grep -F 'owned_storage_entries_remain' "$tlcc_common" >/dev/null || return 1
+    grep -F 'refusing VG/loop cleanup' "$tlcc_common" >/dev/null || return 1
+    grep -F 'owned_vgs_or_loops_remain' "$tlcc_common" >/dev/null || return 1
+    grep -F 'retaining sandbox evidence' "$tlcc_common" >/dev/null || return 1
+}
+
 # Verifies normal version output without exercising command preflight.
 test_all_versions() {
     for tav_script in "$PROJECT_ROOT"/*.sh; do
         tav_output="$(sh "$tav_script" --version)"
-        printf '%s\n' "$tav_output" | grep -F "(project 3.3.0)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
+        printf '%s\n' "$tav_output" | grep -F "(project $PROJECT_VERSION)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
     done
 }
 

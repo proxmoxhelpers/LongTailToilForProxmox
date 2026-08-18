@@ -493,17 +493,19 @@ resolve_vm_disk_slot() {
             return 0
             ;;
     esac
+
     rvds_num="$(normalize_disk_number "$rvds_selector" 2>/dev/null || :)"
     [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an exact QEMU disk slot."
-    rvds_name="vm-${rvds_vm}-disk-${rvds_num}"
-    rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v name="$rvds_name" '
+
+    rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v n="$rvds_num" '
         $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
             split($2,a,","); v=a[1]; sub(/^[^:]+:/,"",v)
-            if (v == name) print $1
+            if (v ~ "^(vm|base)-[0-9]+-disk-" n "$") print $1
         }')"
     rvds_count="$(printf '%s\n' "$rvds_slots" | awk 'NF {n++} END {print n+0}')"
-    [ "$rvds_count" -gt 0 ] || die "VM $rvds_vm has no configured backing volume named $rvds_name."
-    [ "$rvds_count" -eq 1 ] || { printf '%s\n' "$rvds_slots" >&2; die "$rvds_name matches multiple VM slots."; }
+
+    [ "$rvds_count" -gt 0 ] || die "VM $rvds_vm has no configured vm/base backing volume with disk number $rvds_num."
+    [ "$rvds_count" -eq 1 ] || { printf '%s\n' "$rvds_slots" >&2; die "Disk number $rvds_num matches multiple VM slots; use an explicit source slot."; }
     printf '%s\n' "$rvds_slots" | awk 'NF {print; exit}'
 }
 
@@ -757,7 +759,7 @@ verify_destination_boot_first() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.3.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
@@ -825,8 +827,8 @@ DESCRIPTION
   to a destination QEMU VM.
 
 SOURCE SELECTORS
-  <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0.
-  <source-vmid> disk-N  Resolve a standard backing volume name.
+  <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0 or /dev/pve/base-123-disk-0.
+  <source-vmid> disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
   Exact source slots must already exist and must be storage-backed disks.
 
@@ -966,29 +968,32 @@ validate_destination_vm() {
     TARGET_CONFIG="/etc/pve/qemu-server/${DEST_VMID}.conf"
     TARGET_QM_CONFIG="$(qm config "$DEST_VMID")"
     if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE '^lock:[[:space:]]*'; then die "Destination VM $DEST_VMID is locked; resolve the lock first."; fi
+    DEST_PREFIX="vm"
+    if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE '^template:[[:space:]]*1([[:space:]]|$)'; then DEST_PREFIX="base"; fi
 }
 
 # select_disk_name
 # Chooses the requested backing disk number, or the next collision-free number.
+# Templates receive base-DEST-disk-N names; normal VMs receive vm-DEST-disk-N.
 select_disk_name() {
     if [ -n "$REQUESTED_DEST_DISK" ]; then
         DISK_NUMBER="$REQUESTED_DEST_DISK"
-        NEW_LV_NAME="vm-${DEST_VMID}-disk-${DISK_NUMBER}"
+        NEW_LV_NAME="${DEST_PREFIX}-${DEST_VMID}-disk-${DISK_NUMBER}"
         NEW_LV_PATH="/dev/${DEST_VG}/${NEW_LV_NAME}"
         NEW_VOLID="${STORAGE_ID}:${NEW_LV_NAME}"
-        if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qF "$NEW_LV_NAME"; then die "Destination VM already references $NEW_LV_NAME."; fi
+        if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE "(vm|base)-[0-9]+-disk-${DISK_NUMBER}([,[:space:]]|$)"; then die "Destination VM already has a managed backing volume with disk number $DISK_NUMBER."; fi
         if lvs "${DEST_VG}/${NEW_LV_NAME}" >/dev/null 2>&1; then die "Destination LV already exists: $NEW_LV_PATH"; fi
         return 0
     fi
 
-    sdn_highest="$(printf '%s\n' "$TARGET_QM_CONFIG" | grep -oE "vm-${DEST_VMID}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    sdn_highest="$(printf '%s\n' "$TARGET_QM_CONFIG" | grep -oE "(vm|base)-[0-9]+-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
     if [ -n "$sdn_highest" ]; then DISK_NUMBER=$((sdn_highest + 1)); else DISK_NUMBER=0; fi
     while :; do
-        NEW_LV_NAME="vm-${DEST_VMID}-disk-${DISK_NUMBER}"
+        NEW_LV_NAME="${DEST_PREFIX}-${DEST_VMID}-disk-${DISK_NUMBER}"
         NEW_LV_PATH="/dev/${DEST_VG}/${NEW_LV_NAME}"
         NEW_VOLID="${STORAGE_ID}:${NEW_LV_NAME}"
         sdn_busy=0
-        printf '%s\n' "$TARGET_QM_CONFIG" | grep -qF "$NEW_LV_NAME" && sdn_busy=1 || :
+        printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE "(vm|base)-[0-9]+-disk-${DISK_NUMBER}([,[:space:]]|$)" && sdn_busy=1 || :
         lvs "${DEST_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 && sdn_busy=1 || :
         [ "$sdn_busy" -eq 0 ] && break
         DISK_NUMBER=$((DISK_NUMBER + 1))

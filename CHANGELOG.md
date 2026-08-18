@@ -1,5 +1,62 @@
 # Changelog
 
+## 3.4.2 — 2026-08-17
+
+Full behavior-coverage and integration-harness safety audit.
+
+- Re-audited all 42 public helpers against their actual option/state/destructive branches instead of treating one case per command as complete coverage.
+- Expanded the real integration definition to 84 cases across the nine Proxmox groups.
+- Added thin and regular LV copy coverage, byte/content verification, wrong-confirmation and shared-reference refusals, partitioned mount paths, QEMU state-mode transitions, overwrite archive-number collision/delete/empty-target cases, selector/boot variants, QEMU/template/LXC VMID paths, and QEMU/LXC network variants.
+- Every mutating public helper is now statically required to have a `run_dryrun_unchanged` integration case; every public helper must have a non-static integration reference.
+- Dry-run/refusal snapshots now include disposable LV metadata/content samples, QEMU/LXC config and runtime status, test storage definitions, files and mounts.
+- Protected-host baselines now include local QEMU/LXC runtime status and firewall-file checksums in addition to VG/PV/LV, storage and guest-config state.
+- Cleanup now validates exact QEMU/LXC identity and every storage-backed reference before purge, protects pre-existing backup paths, and fails closed between mount, guest, storage and VG/loop cleanup layers.
+- Added config-only disposable LXC fixtures for CT-specific VMID/network paths and a loopback-owned regular VG for the non-sparse regular-LV copy path.
+- Added a static documentation-coverage invariant requiring all 42 public scripts to appear exactly once in the README helper inventory/download lines and test matrix.
+- Updated README/testing documentation to distinguish the last fully real-host validated v3.0.1 baseline from the broader v3.4.2 release-candidate suite.
+
+## 3.4.1 — 2026-08-17
+
+Selective merge of stronger logic from an alternate 3.2.0 development branch without regressing the newer 3.4.x feature set.
+
+- `verify-vm-disk-numbering.sh` now detects active `disk-N` gaps and duplicates in addition to non-zero starts, while continuing to exclude `unusedN` archive disks from sequence analysis.
+- `list-all-vm-lvm-filesystems.sh` now uses read-only `partx --show` partition metadata, a richer GPT/MBR intent table and broader filesystem/container compatibility rules, while retaining inspection of remaining/unreferenced LVs.
+- `renumber-vm-disks.sh` now renumbers each prefix + embedded-VMID namespace independently, so configured stale names such as `base-100-disk-*` are not skipped; the shared-volume ownership guard was also restored.
+- `fix-vm-volume-names.sh` again includes `efidiskN` and `tpmstateN`, preserves the exact managed `disk-N`, refuses corrected-name collisions, and keys planned-name collision checks by VG + LV name.
+- `change-vmid-of-vm.sh` warns about configured managed volumes whose embedded VMID differs from the source VMID and leaves those foreign names untouched for explicit repair.
+- Numeric managed `disk-N` selectors in `move-disk-to-vm.sh` and all four create helpers now refuse any configured ambiguity instead of giving a current-VMID name silent precedence over a stale `vm-/base-` match.
+- Regenerated affected standalone wrapper payloads and expanded static/integration fixtures for the merged behavior.
+- Intentionally retained the newer 3.4.x overwrite transactions, slot/bus selectors, `boot`, empty-target behavior, UUID-safe rollback and template-aware destination naming.
+
+## 3.4.0 — 2026-08-17
+
+Read-only VM/LVM numbering and filesystem inspection.
+
+- Added `verify-vm-disk-numbering.sh`, grouping guest LVM volumes by VMID and highlighting managed `vm-/base-` volumes whose embedded VMID does not match the referencing guest.
+- The numbering verifier flags guests whose active managed disk-number set does not start at `disk-0`; `unusedN` archive entries are displayed but excluded from the start-at-zero decision.
+- Added `list-all-vm-lvm-filesystems.sh`, which inventories every guest-referenced LV and all remaining LVs without mounting or creating partition mappings.
+- Partition metadata and actual content are reported separately: GPT/MBR partition types become `TABLE_HINT`, while `blkid` probes the exact partition byte range for `CONTENT_FORMAT`.
+- Added stable terminal colors for FAT/vfat/exFAT, NTFS, ext-family, Btrfs, XFS, LVM, ZFS, LUKS and other detected content.
+- Definite partition-type/content conflicts receive a red `MISMATCH` note; broad/unknown table types are not treated as false mismatches.
+- Expanded the inspection integration group with a deliberate VMID/disk-number mismatch and a real GPT + ext4 disposable fixture.
+- Expanded the project to 42 standalone helpers.
+
+## 3.3.1 — 2026-08-17
+
+Managed Proxmox LVM naming support for both VM and template/base volumes.
+
+- Audited all 40 helpers for assumptions that managed LVs are only named `vm-VMID-disk-N`.
+- `change-vmid-of-vm.sh` now renames both `vm-*` and `base-*` volumes while preserving their family.
+- `renumber-vm-disks.sh` renumbers `vm-*` and `base-*` families independently.
+- `fix-vm-volume-names.sh` preserves `vm-`/`base-`, including stale embedded VMIDs such as `base-100-disk-1` referenced by VMID 199.
+- `find-orphaned-volumes.sh` now includes unreferenced `base-VMID-disk-N` volumes.
+- `recover-vm-from-volumes.sh` discovers both managed naming families.
+- Numeric disk selectors in `move-disk-to-vm.sh` and the four create helpers now recognize both families and can fall back to a stale embedded VMID only when the configured match is unambiguous.
+- Create-and-add helpers use `base-DEST-disk-N` for template destinations and `vm-DEST-disk-N` for normal VMs.
+- Overwrite helpers preserve the existing target family; empty template targets use `base-`.
+- Regenerated standalone wrapper payloads so no top-level helper regressed to an external runtime dependency.
+- Added template/base integration fixtures covering inspection, VMID change, renumbering, name repair, recovery, numeric selectors, copy, snapshot and overwrite behavior.
+
 ## 3.3.0 — 2026-08-17
 
 Create-helper device selectors and boot-order promotion.

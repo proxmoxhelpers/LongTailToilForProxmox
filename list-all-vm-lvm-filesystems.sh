@@ -389,118 +389,388 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.0.0"
-    SLOT=""
+    define_format_colours
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="1.1.0"
+    ALL_LVS_FILE=""; REFS_FILE=""; PARTS_FILE=""
     parse_arguments "$@"
-    check_elevation
 }
 
 main() {
+    check_elevation
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    install_temp_cleanup
-    need_commands qm pvesm mktemp
-    validate_import
-    import_disk
-    attach_imported_disk
+    need_commands lvs pvesm find awk sed grep sort mktemp partx blkid blockdev tr
+    build_lvm_catalog
+    collect_guest_lvm_references
+    print_guest_filesystems
+    print_remaining_filesystems
 }
 
-end() {
-    [ -z "${BEFORE_FILE:-}" ] || rm -f "$BEFORE_FILE"
-    [ -z "${AFTER_FILE:-}" ] || rm -f "$AFTER_FILE"
-    dryrun_summary
-}
+end() { cleanup_files; }
 
 ############################################################
 # COMMAND LINE
 ############################################################
 
-usage() { printf 'Usage: %s <image-file> <vmid> <destination-storage> [scsiN] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") [dryrun]
+
+DESCRIPTION
+  Lists every LVM volume referenced by Proxmox QEMU/LXC guests, grouped under
+  its VMID, then inspects the partition table and the actual content of each
+  partition without mounting it or creating partition mappings.
+
+  TABLE_HINT and CONTENT_FORMAT are intentionally separate:
+
+    TABLE_HINT      is derived from the GPT/MBR partition type.
+    CONTENT_FORMAT  is detected directly from bytes inside that partition.
+
+  Partition tables do not generally store an exact filesystem format. Generic
+  types such as Linux filesystem and Microsoft basic data are therefore shown
+  as LINUX-FS or MS-DATA. A red MISMATCH note is printed only when the table
+  type provides a meaningful expectation and the detected content violates it.
+
+  LVs with no partition table are probed as a whole-device filesystem.
+
+COLOURS
+  NTFS / BitLocker       bright magenta
+  FAT / exFAT            bright cyan
+  ext2 / ext3 / ext4     bright green
+  Btrfs                  bright blue
+  XFS                    bright yellow
+  swap                   bright red
+  LVM / LUKS / RAID      distinct terminal colours
+  ZFS                    cyan
+  other / unknown        bright white
+  mismatch notes         red
+
+SAFETY
+  Read-only. Uses partx --show and blkid offset probing only. It does not mount,
+  write, run fsck, create partition mappings, or modify device-mapper state.
+
+EOF
+    dryrun_help
+}
 
 parse_arguments() {
-    pa_count=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
             -h|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
-            *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) IMAGE="$1" ;; 2) VMID="$1" ;; 3) STORAGE="$1" ;; 4) SLOT="$1" ;; *) usage >&2; exit 2 ;; esac ;;
+            *) usage >&2; exit 2 ;;
         esac
         shift
     done
-    [ "$pa_count" -ge 3 ] && [ "$pa_count" -le 4 ] || { usage >&2; exit 2; }
 }
 
 ############################################################
-# VALIDATION / PRE-FLIGHT
+# COLOUR / FORMAT HELPERS
 ############################################################
 
-# validate_import
-# Validates input image, destination VM/storage/slot and records the pre-import unused-disk state.
-validate_import() {
-    [ -f "$IMAGE" ] || die "Image file does not exist: $IMAGE"
-    require_qemu_vm "$VMID"; require_guest_stopped "$VMID"
-    pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "Storage unavailable: $STORAGE"
-    [ -n "$SLOT" ] || SLOT="$(first_free_scsi "$VMID")"
-    [ -z "$(disk_value "$VMID" "$SLOT")" ] || die "$SLOT is already occupied."
-    BEFORE_FILE="$(mktemp)" || die "Unable to create import state file."
-    register_temp_file "$BEFORE_FILE"
-    qm config "$VMID" | awk -F: '$1 ~ /^unused[0-9]+$/ {print $1 ":" $2}' > "$BEFORE_FILE"
+define_format_colours() {
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+        dfc_esc="$(printf '\033')"
+        F_NTFS="${dfc_esc}[95m"
+        F_FAT="${dfc_esc}[96m"
+        F_EXT="${dfc_esc}[92m"
+        F_BTRFS="${dfc_esc}[94m"
+        F_XFS="${dfc_esc}[93m"
+        F_SWAP="${dfc_esc}[91m"
+        F_LVM="${dfc_esc}[35m"
+        F_LUKS="${dfc_esc}[33m"
+        F_RAID="${dfc_esc}[34m"
+        F_ZFS="${dfc_esc}[36m"
+        F_OTHER="${dfc_esc}[97m"
+    else
+        F_NTFS=""; F_FAT=""; F_EXT=""; F_BTRFS=""; F_XFS=""; F_SWAP=""
+        F_LVM=""; F_LUKS=""; F_RAID=""; F_ZFS=""; F_OTHER=""
+    fi
+}
+
+fs_colour() {
+    fc_fs="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$fc_fs" in
+        ntfs|bitlocker) printf '%s' "$F_NTFS" ;;
+        vfat|fat|fat12|fat16|fat32|msdos|exfat) printf '%s' "$F_FAT" ;;
+        ext2|ext3|ext4) printf '%s' "$F_EXT" ;;
+        btrfs) printf '%s' "$F_BTRFS" ;;
+        xfs) printf '%s' "$F_XFS" ;;
+        swap) printf '%s' "$F_SWAP" ;;
+        lvm2_member) printf '%s' "$F_LVM" ;;
+        crypto_luks|luks) printf '%s' "$F_LUKS" ;;
+        linux_raid_member) printf '%s' "$F_RAID" ;;
+        zfs_member|zfs) printf '%s' "$F_ZFS" ;;
+        *) printf '%s' "$F_OTHER" ;;
+    esac
+}
+
+class_colour() {
+    cc_class="$1"
+    case "$cc_class" in
+        microsoft) printf '%s' "$F_NTFS" ;;
+        fat) printf '%s' "$F_FAT" ;;
+        linuxfs) printf '%s' "$F_EXT" ;;
+        swap) printf '%s' "$F_SWAP" ;;
+        lvm) printf '%s' "$F_LVM" ;;
+        luks) printf '%s' "$F_LUKS" ;;
+        raid) printf '%s' "$F_RAID" ;;
+        zfs) printf '%s' "$F_ZFS" ;;
+        *) printf '%s' "$F_OTHER" ;;
+    esac
+}
+
+human_bytes() {
+    awk -v hb="$1" 'BEGIN {
+        split("B KiB MiB GiB TiB PiB", u, " "); i=1
+        while (hb >= 1024 && i < 6) { hb/=1024; i++ }
+        if (i==1) printf "%.0f %s", hb, u[i]; else printf "%.1f %s", hb, u[i]
+    }'
 }
 
 ############################################################
-# HIGH LEVEL TASKS
+# PARTITION TABLE INTERPRETATION
 ############################################################
 
-# import_disk
-# Invokes qm importdisk after all import preflight has completed.
-import_disk() {
-    info "Importing $IMAGE into $STORAGE..."
-    dryrun_cmd qm importdisk "$VMID" "$IMAGE" "$STORAGE"
+# table_type_info RAW_TYPE
+# Prints friendly-label|compatibility-class.
+table_type_info() (
+    tti_raw="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$tti_raw" in
+        0x01|01|0x04|04|0x06|06|0x0e|0e) printf '%s\n' "FAT16|fat" ;;
+        0x0b|0b|0x0c|0c) printf '%s\n' "FAT32|fat" ;;
+        0x07|07) printf '%s\n' "Microsoft data|microsoft" ;;
+        0x05|05|0x0f|0f|0x85|85) printf '%s\n' "Extended partition|none" ;;
+        0x82|82) printf '%s\n' "Linux swap|swap" ;;
+        0x83|83) printf '%s\n' "Linux filesystem|linuxfs" ;;
+        0x8e|8e) printf '%s\n' "Linux LVM|lvm" ;;
+        0xfd|fd) printf '%s\n' "Linux RAID|raid" ;;
+        0xef|ef) printf '%s\n' "EFI System|fat" ;;
+        0xaf|af) printf '%s\n' "Apple HFS/HFS+|hfs" ;;
+        0xa5|a5) printf '%s\n' "FreeBSD|unknown" ;;
+
+        c12a7328-f81f-11d2-ba4b-00a0c93ec93b) printf '%s\n' "EFI System|fat" ;;
+        ebd0a0a2-b9e5-4433-87c0-68b6b72699c7) printf '%s\n' "Microsoft basic data|microsoft" ;;
+        de94bba4-06d1-4d40-a16a-bfd50179d6ac) printf '%s\n' "Windows recovery|microsoft" ;;
+        e3c9e316-0b5c-4db8-817d-f92df00215ae) printf '%s\n' "Microsoft reserved|none" ;;
+        0fc63daf-8483-4772-8e79-3d69d8477de4) printf '%s\n' "Linux filesystem|linuxfs" ;;
+        0657fd6d-a4ab-43c4-84e5-0933c84b4f4f) printf '%s\n' "Linux swap|swap" ;;
+        e6d6d379-f507-44c2-a23c-238f2a3df928) printf '%s\n' "Linux LVM|lvm" ;;
+        a19d880f-05fc-4d3b-a006-743f0f84911e) printf '%s\n' "Linux RAID|raid" ;;
+        933ac7e1-2eb4-4f13-b844-0e14e2aef915) printf '%s\n' "Linux /home|linuxfs" ;;
+        3b8f8425-20e0-4f3b-907f-1a25a76f98e8) printf '%s\n' "Linux /srv|linuxfs" ;;
+        44479540-f297-41b2-9af7-d131d5f0458a) printf '%s\n' "Linux root x86|linuxfs" ;;
+        4f68bce3-e8cd-4db1-96e7-fbcaf984b709) printf '%s\n' "Linux root x86-64|linuxfs" ;;
+        69dad710-2ce4-4e3c-b16c-21a1d49abed3) printf '%s\n' "Linux root ARM|linuxfs" ;;
+        b921b045-1df0-41c3-af44-4c6f280d3fae) printf '%s\n' "Linux root ARM64|linuxfs" ;;
+        21686148-6449-6e6f-744e-656564454649) printf '%s\n' "BIOS boot|none" ;;
+        48465300-0000-11aa-aa11-00306543ecac) printf '%s\n' "Apple HFS/HFS+|hfs" ;;
+        7c3457ef-0000-11aa-aa11-00306543ecac) printf '%s\n' "Apple APFS|apfs" ;;
+        6a898cc3-1dd2-11b2-99a6-080020736631) printf '%s\n' "Solaris /usr / ZFS|zfs" ;;
+        "") printf '%s\n' "Unknown|unknown" ;;
+        *) printf '%s|unknown\n' "$1" ;;
+    esac
+)
+
+content_class() {
+    ccl_fs="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$ccl_fs" in
+        vfat|fat|fat12|fat16|fat32|msdos) printf '%s\n' "fat" ;;
+        ntfs|exfat|bitlocker) printf '%s\n' "microsoft" ;;
+        ext2|ext3|ext4|btrfs|xfs|f2fs|reiserfs|reiser4|jfs|nilfs2|bcachefs|ocfs2|gfs2|erofs|squashfs) printf '%s\n' "linuxfs" ;;
+        swap) printf '%s\n' "swap" ;;
+        lvm2_member) printf '%s\n' "lvm" ;;
+        crypto_luks) printf '%s\n' "luks" ;;
+        linux_raid_member) printf '%s\n' "raid" ;;
+        zfs_member|zfs) printf '%s\n' "zfs" ;;
+        hfs|hfsplus) printf '%s\n' "hfs" ;;
+        apfs) printf '%s\n' "apfs" ;;
+        "") printf '%s\n' "none" ;;
+        *) printf '%s\n' "other" ;;
+    esac
 }
 
-# attach_imported_disk
-#
-# Description:
-#   Identifies the newly-created unusedN entry, attaches that volume at the
-#   requested SCSI slot, and removes the duplicate unusedN config reference.
-#
-# Usage:
-#   attach_imported_disk
-#
-# Arguments:
-#   Uses VMID, STORAGE, SLOT and BEFORE_FILE.
-#
-# Output:
-#   Sets VOLID and UKEY.
-#
-# Returns:
-#   0 after verified attachment; exits on ambiguity or verification failure.
+# table_content_match TABLE_CLASS CONTENT_FS
+# Unknown partition types are deliberately non-strict.
+table_content_match() {
+    tcm_table="$1"; tcm_fs="$2"; tcm_content="$(content_class "$tcm_fs")"
+    case "$tcm_table" in
+        unknown) return 0 ;;
+        none) [ "$tcm_content" = "none" ] ;;
+        fat) [ "$tcm_content" = "fat" ] ;;
+        microsoft) [ "$tcm_content" = "microsoft" ] || [ "$tcm_content" = "fat" ] ;;
+        linuxfs) [ "$tcm_content" = "linuxfs" ] || [ "$tcm_content" = "luks" ] ;;
+        swap|lvm|raid|zfs|hfs|apfs) [ "$tcm_content" = "$tcm_table" ] ;;
+        *) return 0 ;;
+    esac
+}
+
 ############################################################
-attach_imported_disk() {
-    if dryrun_enabled; then
-        UKEY="unusedN"; VOLID="${STORAGE}:<imported-volume>"
-        dryrun_print_shell "qm set $(shell_quote "$VMID") --$(shell_quote "$SLOT") <volume-created-by-qm-importdisk>"
-        dryrun_print_shell "qm set $(shell_quote "$VMID") --delete <unusedN-created-by-qm-importdisk>"
-        dryrun_verify "Imported volume would be attached to $SLOT"
-        ok "Imported and attached $VOLID as $SLOT."
+# DISCOVERY
+############################################################
+
+build_lvm_catalog() {
+    install_temp_cleanup
+    ALL_LVS_FILE="$(mktemp)" || die "Unable to create LVM catalog."; register_temp_file "$ALL_LVS_FILE"
+    REFS_FILE="$(mktemp)" || die "Unable to create guest-reference catalog."; register_temp_file "$REFS_FILE"
+    PARTS_FILE="$(mktemp)" || die "Unable to create partition scratch file."; register_temp_file "$PARTS_FILE"
+
+    lvs --noheadings --separator '|' -o lv_uuid,lv_path,vg_name,lv_name,lv_size,pool_lv,origin 2>/dev/null |
+        awk -F'|' '{
+            for (i=1; i<=7; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+            if ($1 != "" && $2 != "") print $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7
+        }' | sort -t'|' -k3,3 -k4,4 > "$ALL_LVS_FILE"
+}
+
+# collect_guest_lvm_references
+# REFS_FILE columns: vmid|type|name|slot|volid|uuid|path|size
+collect_guest_lvm_references() {
+    : > "$REFS_FILE"
+    all_guest_configs | while IFS= read -r cgr_cfg; do
+        [ -n "$cgr_cfg" ] || continue
+        cgr_id="${cgr_cfg##*/}"; cgr_id="${cgr_id%.conf}"
+        case "$cgr_id" in ''|*[!0-9]*) continue ;; esac
+
+        case "$cgr_cfg" in
+            */lxc/*) cgr_type="LXC"; cgr_name="$(awk -F': ' '$1=="hostname" {print $2; exit}' "$cgr_cfg")" ;;
+            *) cgr_type="QEMU"; cgr_name="$(awk -F': ' '$1=="name" {print $2; exit}' "$cgr_cfg")" ;;
+        esac
+        [ -n "$cgr_name" ] || cgr_name="-"
+
+        config_volume_references "$cgr_cfg" | while IFS='|' read -r cgr_slot cgr_volid; do
+            [ -n "$cgr_volid" ] || continue
+            cgr_path="$(pvesm path "$cgr_volid" 2>/dev/null || :)"
+            [ -n "$cgr_path" ] || continue
+            lvs "$cgr_path" >/dev/null 2>&1 || continue
+            cgr_uuid="$(lvs --noheadings -o lv_uuid "$cgr_path" 2>/dev/null | trim)"
+            [ -n "$cgr_uuid" ] || continue
+            cgr_row="$(awk -F'|' -v u="$cgr_uuid" '$1==u {print $2 "|" $5; exit}' "$ALL_LVS_FILE")"
+            [ -n "$cgr_row" ] || continue
+            cgr_catalog_path="${cgr_row%%|*}"; cgr_size="${cgr_row#*|}"
+            printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$cgr_id" "$cgr_type" "$cgr_name" "$cgr_slot" "$cgr_volid" "$cgr_uuid" "$cgr_catalog_path" "$cgr_size"
+        done
+    done | sort -t'|' -k1,1n -k4,4 -u > "$REFS_FILE"
+    return 0
+}
+
+############################################################
+# CONTENT PROBING
+############################################################
+
+probe_partition_fs() {
+    ppf_path="$1"; ppf_offset="$2"; ppf_size="$3"
+    blkid -p -o value -s TYPE -O "$ppf_offset" -S "$ppf_size" "$ppf_path" 2>/dev/null || :
+}
+
+probe_whole_fs() {
+    blkid -p -o value -s TYPE "$1" 2>/dev/null || :
+}
+
+print_partition_row() {
+    ppr_part="$1"; ppr_start="$2"; ppr_bytes="$3"; ppr_rawtype="$4"; ppr_fs="$5"
+    ppr_info="$(table_type_info "$ppr_rawtype")"
+    ppr_label="${ppr_info%%|*}"; ppr_class="${ppr_info#*|}"
+    [ -n "$ppr_fs" ] || ppr_fs="(none)"
+
+    if [ "$ppr_fs" != "(none)" ] && table_content_match "$ppr_class" "$ppr_fs"; then
+        ppr_table_colour="$(fs_colour "$ppr_fs")"
+        ppr_note=""
+    elif [ "$ppr_fs" = "(none)" ] && table_content_match "$ppr_class" ""; then
+        ppr_table_colour="$(class_colour "$ppr_class")"
+        ppr_note=""
+    else
+        ppr_table_colour="$(class_colour "$ppr_class")"
+        ppr_note="MISMATCH: table says $ppr_label; content is $ppr_fs"
+    fi
+    ppr_fs_colour="$(fs_colour "$ppr_fs")"
+    ppr_human="$(human_bytes "$ppr_bytes")"
+
+    printf '    %-7s %-11s %-11s ' "$ppr_part" "$ppr_start" "$ppr_human"
+    printf '%s%-24s%s ' "$ppr_table_colour" "$ppr_label" "$C_RESET"
+    printf '%s%-18s%s' "$ppr_fs_colour" "$ppr_fs" "$C_RESET"
+    if [ -n "$ppr_note" ]; then printf '  %s%s%s' "$C_RED$C_BOLD" "$ppr_note" "$C_RESET"; fi
+    printf '\n'
+}
+
+inspect_disk() {
+    id_path="$1"; id_size="$2"
+    id_pttype="$(blkid -p -o value -s PTTYPE "$id_path" 2>/dev/null || :)"
+    [ -n "$id_pttype" ] || id_pttype="none"
+
+    : > "$PARTS_FILE"
+    partx --show --raw --noheadings -o NR,START,SECTORS,TYPE "$id_path" > "$PARTS_FILE" 2>/dev/null || :
+
+    printf '    Partition table: %s\n' "$id_pttype"
+    printf '    %-7s %-11s %-11s %-24s %-18s %s\n' PART START SIZE TABLE_HINT CONTENT_FORMAT NOTE
+
+    if [ ! -s "$PARTS_FILE" ]; then
+        id_fs="$(probe_whole_fs "$id_path")"; [ -n "$id_fs" ] || id_fs="(none)"
+        id_colour="$(fs_colour "$id_fs")"
+        printf '    %-7s %-11s %-11s %-24s ' whole - "$id_size" "(whole disk)"
+        printf '%s%-18s%s\n' "$id_colour" "$id_fs" "$C_RESET"
         return 0
     fi
 
-    AFTER_FILE="$(mktemp)" || die "Unable to create post-import state file."
-    register_temp_file "$AFTER_FILE"
-    qm config "$VMID" | awk -F: '$1 ~ /^unused[0-9]+$/ {print $1 ":" $2}' > "$AFTER_FILE"
-    ai_new="$(
-        while IFS= read -r ai_line; do
-            grep -Fx "$ai_line" "$BEFORE_FILE" >/dev/null 2>&1 || printf '%s\n' "$ai_line"
-        done < "$AFTER_FILE" | tail -n1
-    )"
-    [ -n "$ai_new" ] || die "Import finished but the new unused disk could not be identified."
-    UKEY="${ai_new%%:*}"
-    VOLID="$(disk_volid "$VMID" "$UKEY" || :)"; [ -n "$VOLID" ] || die "Could not resolve imported volume."
-    qm set "$VMID" "--$SLOT" "$VOLID"
-    [ "$(disk_volid "$VMID" "$SLOT")" = "$VOLID" ] || die "Attach verification failed."
-    if qm config "$VMID" | grep -qE "^${UKEY}:"; then qm set "$VMID" --delete "$UKEY"; fi
-    ok "Imported and attached $VOLID as $SLOT."
+    id_sector="$(blockdev --getss "$id_path" 2>/dev/null || :)"
+    case "$id_sector" in ''|*[!0-9]*) id_sector=512 ;; esac
+
+    while read -r id_nr id_start id_sectors id_type; do
+        [ -n "$id_nr" ] || continue
+        case "$id_start:$id_sectors" in *[!0-9:]*|:*|*:) continue ;; esac
+        id_offset=$((id_start * id_sector))
+        id_bytes=$((id_sectors * id_sector))
+        id_fs="$(probe_partition_fs "$id_path" "$id_offset" "$id_bytes")"
+        print_partition_row "part$id_nr" "$id_start" "$id_bytes" "$id_type" "$id_fs"
+    done < "$PARTS_FILE"
+    return 0
+}
+
+############################################################
+# RESULTS
+############################################################
+
+print_guest_filesystems() {
+    section "VM / CT LVM partition and filesystem inventory"
+    if [ ! -s "$REFS_FILE" ]; then printf '%s\n' "(none)"; return 0; fi
+
+    pgf_last=""
+    while IFS='|' read -r pgf_id pgf_type pgf_name pgf_slot pgf_volid pgf_uuid pgf_path pgf_size; do
+        if [ "$pgf_id" != "$pgf_last" ]; then
+            [ -z "$pgf_last" ] || printf '\n'
+            printf '%sVM %s%s  %s(%s) %s%s\n' "$C_BOLD$C_CYAN" "$pgf_id" "$C_RESET" "$C_CYAN" "$pgf_type" "$pgf_name" "$C_RESET"
+            pgf_last="$pgf_id"
+        fi
+        printf '\n  %s%-10s%s %-40s %s\n' "$C_BOLD" "$pgf_slot" "$C_RESET" "$pgf_path" "$pgf_size"
+        inspect_disk "$pgf_path" "$pgf_size"
+    done < "$REFS_FILE"
+    return 0
+}
+
+print_remaining_filesystems() {
+    section "Remaining LVM volumes"
+    prf_count=0
+    while IFS='|' read -r prf_uuid prf_path prf_vg prf_lv prf_size prf_pool prf_origin; do
+        if awk -F'|' -v u="$prf_uuid" '$6==u {found=1; exit} END {exit(found ? 0 : 1)}' "$REFS_FILE"; then continue; fi
+        printf '\n  %s%-40s%s %s\n' "$C_CYAN" "$prf_path" "$C_RESET" "$prf_size"
+        inspect_disk "$prf_path" "$prf_size"
+        prf_count=$((prf_count + 1))
+    done < "$ALL_LVS_FILE"
+    [ "$prf_count" -gt 0 ] || printf '%s\n' "(none)"
+    return 0
+}
+
+############################################################
+# GENERAL HELPERS
+############################################################
+
+cleanup_files() {
+    [ -z "$ALL_LVS_FILE" ] || rm -f "$ALL_LVS_FILE"
+    [ -z "$REFS_FILE" ] || rm -f "$REFS_FILE"
+    [ -z "$PARTS_FILE" ] || rm -f "$PARTS_FILE"
 }
 
 ############################################################

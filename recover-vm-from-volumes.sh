@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.1"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.3.1"
     VG=""; RECOVERY_FILE=""
     parse_arguments "$@"
     check_elevation
@@ -445,8 +445,9 @@ validate_vmid() {
 # build_recovery_plan
 #
 # Description:
-#   Finds vm-VMID-disk-N LVs, resolves each to one unambiguous Proxmox volume
-#   ID, and refuses any disk already referenced by a guest.
+#   Finds vm-VMID-disk-N and base-VMID-disk-N LVs, resolves each to one
+#   unambiguous Proxmox volume ID, and refuses any disk already referenced by
+#   a guest. Both managed-volume families are recovered deterministically.
 #
 # Usage:
 #   build_recovery_plan
@@ -468,10 +469,17 @@ build_recovery_plan() {
     register_temp_file "${brp_lvs}.sorted"
     if [ -n "$VG" ]; then lvs --noheadings --separator '|' -o lv_path,lv_name "$VG" > "$brp_lvs"
     else lvs --noheadings --separator '|' -o lv_path,lv_name > "$brp_lvs"; fi
-    awk -F'|' -v id="$VMID" '{gsub(/^ +| +$/,"",$1);gsub(/^ +| +$/,"",$2); if ($2 ~ "^vm-"id"-disk-[0-9]+$") {n=$2; sub(/^.*-disk-/,"",n); print n "|" $1}}' "$brp_lvs" | sort -t'|' -k1,1n > "${brp_lvs}.sorted"
+    awk -F'|' -v id="$VMID" '{
+        gsub(/^ +| +$/,"",$1); gsub(/^ +| +$/,"",$2)
+        if ($2 ~ "^(vm|base)-"id"-disk-[0-9]+$") {
+            family=$2; sub(/-.*/,"",family)
+            n=$2; sub(/^.*-disk-/,"",n)
+            print n "|" family "|" $1
+        }
+    }' "$brp_lvs" | sort -t'|' -k1,1n -k2,2 > "${brp_lvs}.sorted"
     rm -f "$brp_lvs"
-    [ -s "${brp_lvs}.sorted" ] || { rm -f "${brp_lvs}.sorted"; die "No LVs named vm-${VMID}-disk-N were found${VG:+ in VG $VG}."; }
-    while IFS='|' read -r brp_num brp_path; do
+    [ -s "${brp_lvs}.sorted" ] || { rm -f "${brp_lvs}.sorted"; die "No LVs named vm-${VMID}-disk-N or base-${VMID}-disk-N were found${VG:+ in VG $VG}."; }
+    while IFS='|' read -r brp_num brp_family brp_path; do
         brp_volid="$(volid_for_lv "$brp_path")"
         brp_refs="$(other_volume_references "$brp_volid")"
         [ -z "$brp_refs" ] || { printf '%s\n' "$brp_refs"; rm -f "${brp_lvs}.sorted"; die "$brp_volid is already referenced by another guest."; }
@@ -504,6 +512,8 @@ verify_recovered_vm() {
     else qm config "$VMID" >/dev/null || die "Recovered configuration failed validation."; fi
     ok "Created VM $VMID with $RECOVERED_COUNT recovered disk(s). Review CPU, memory, firmware, machine type, NICs, and boot settings before starting."
 }
+
+# Discovers both vm-VMID-disk-N and base-VMID-disk-N volumes.
 
 ############################################################
 # START

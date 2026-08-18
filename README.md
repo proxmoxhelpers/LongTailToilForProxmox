@@ -1,14 +1,14 @@
 # Proxmox LongTail Toil
 
-**Proxmox LongTail Toil** is a collection of 40 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
+**Proxmox LongTail Toil** is a collection of 42 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
 
-## The 40 helpers
+## The 42 helpers
 
 ### VM identity, recovery and inspection
 
 #### `change-vmid-of-vm.sh`
 
-Change the VMID of a stopped local QEMU VM or LXC container whose backing volumes are on LVM/LVM-thin, with preflight checks, backup, verification and rollback.
+Change the VMID of a stopped local QEMU VM or LXC container on LVM/LVM-thin, renaming both `vm-OLDID-*` and template `base-OLDID-*` volumes while preserving their family, with preflight checks, backup, verification and rollback.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-vmid-of-vm.sh" -O "change-vmid-of-vm.sh" && chmod +x "change-vmid-of-vm.sh"
@@ -32,7 +32,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `recover-vm-from-volumes.sh`
 
-Recreate a basic QEMU VM configuration from existing `vm-VMID-disk-N` LVM volumes.
+Recreate a basic QEMU VM configuration from existing `vm-VMID-disk-N` and/or `base-VMID-disk-N` LVM volumes.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/recover-vm-from-volumes.sh" -O "recover-vm-from-volumes.sh" && chmod +x "recover-vm-from-volumes.sh"
@@ -66,6 +66,18 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ./list-all-vm-lvm.sh
 ```
 
+#### `verify-vm-disk-numbering.sh`
+
+Verify all guest LVM disk numbering, highlighting embedded VMID mismatches in red and active numbering that starts above `disk-0`, contains gaps, or contains duplicate `disk-N` values in yellow; `unusedN` archive entries are shown but excluded from sequence checks.
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/verify-vm-disk-numbering.sh" -O "verify-vm-disk-numbering.sh" && chmod +x "verify-vm-disk-numbering.sh"
+```
+
+```sh
+./verify-vm-disk-numbering.sh
+```
+
 #### `audit-vm-storage.sh`
 
 Audit a VM's storage references for missing paths, bad mappings and unexpected references.
@@ -92,7 +104,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `find-orphaned-volumes.sh`
 
-Find VM-style LVM volumes that do not appear to be referenced by local guest configurations.
+Find unreferenced Proxmox-managed `vm-VMID-disk-N` and `base-VMID-disk-N` LVM volumes.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/find-orphaned-volumes.sh" -O "find-orphaned-volumes.sh" && chmod +x "find-orphaned-volumes.sh"
@@ -154,6 +166,18 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 ### Mounting and filesystem inspection
 
+#### `list-all-vm-lvm-filesystems.sh`
+
+List every guest and remaining LVM disk with read-only `partx` partition metadata beside the filesystem/container signature detected directly from the partition bytes, using format-specific colors, broad compatibility rules, and red notes for definite table/content mismatches.
+
+```sh
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/list-all-vm-lvm-filesystems.sh" -O "list-all-vm-lvm-filesystems.sh" && chmod +x "list-all-vm-lvm-filesystems.sh"
+```
+
+```sh
+./list-all-vm-lvm-filesystems.sh
+```
+
 #### `mount-vm-drives.sh`
 
 Mount recognizable filesystems from an LVM-backed VM disk, using `kpartx` for partitions and read-only mode by default.
@@ -206,7 +230,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `move-disk-to-vm.sh`
 
-Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; default is live hot-swap, with optional `pause`, `stop`, or `restart` control for the source VM.
+Move an LVM-backed disk to another QEMU VM by full LV path or source VM + disk number; numeric selectors understand both `vm-` and `base-` names (including an unambiguous stale embedded VMID), with hot/pause/stop/restart source-state control.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-disk-to-vm.sh" -O "move-disk-to-vm.sh" && chmod +x "move-disk-to-vm.sh"
@@ -268,7 +292,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-snapshot-and-add-to-vm.sh`
 
-Create an LVM-thin snapshot from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; attach it by backing disk number, exact slot, or first-free bus, with optional source-state handling and `boot` promotion.
+Create an LVM-thin snapshot from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with device selection, state handling and optional `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-add-to-vm.sh" -O "create-disk-snapshot-and-add-to-vm.sh" && chmod +x "create-disk-snapshot-and-add-to-vm.sh"
@@ -280,7 +304,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-copy-and-add-to-vm.sh`
 
-Create a full verified copy from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; attach it by backing disk number, exact slot, or first-free bus, optionally choose the destination VG, and optionally use source-state handling plus `boot` promotion.
+Create a full verified copy from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with destination VG/device selection, state handling and optional `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
@@ -402,7 +426,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `renumber-vm-disks.sh`
 
-Renumber a VM's backing `vm-VMID-disk-N` LVs into a contiguous sequence and update its configuration.
+Renumber configured managed LVs into contiguous sequences per prefix + embedded-VMID namespace (for example `vm-199-*` separately from stale `base-100-*`), preserving those namespaces, updating the VM configuration, and refusing volumes referenced by another guest.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/renumber-vm-disks.sh" -O "renumber-vm-disks.sh" && chmod +x "renumber-vm-disks.sh"
@@ -414,7 +438,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `fix-vm-volume-names.sh`
 
-Rename backing VM LVs whose embedded VMID does not match the VM that references them.
+Repair managed backing LV names whose embedded VMID does not match the referencing guest, including normal disks, `unusedN`, EFI and TPM state volumes; preserve `vm-` vs `base-` and the original `disk-N`, and refuse an exact corrected-name collision instead of silently choosing another number.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/fix-vm-volume-names.sh" -O "fix-vm-volume-names.sh" && chmod +x "fix-vm-volume-names.sh"
@@ -536,33 +560,44 @@ and:
 
 Most commands that can modify the host also accept `dryrun` or `--dryrun` anywhere on the command line.
 
+## Proxmox managed LVM names
+
+Where a helper interprets Proxmox-managed LVM volume names, both standard families are supported:
+
+```text
+vm-VMID-disk-N
+base-VMID-disk-N
+```
+
+`base-` is used by Proxmox templates/base images. Operations that rename an existing managed volume preserve its family; operations that create a destination disk use `base-` when the destination QEMU guest is a template and `vm-` otherwise. Disk-number selectors first prefer the current VMID and may fall back to a stale embedded VMID only when exactly one configured managed volume has that `disk-N`.
+
 ## Safety model
 
-These scripts are deliberately more cautious than the one-liners they replace. Depending on the operation they perform preflight discovery, refuse ambiguous storage mappings, check for collisions/shared references, leave guests stopped when configuration surgery requires it, create backups before direct `/etc/pve` edits, verify postconditions, and use rollback or conservative preservation when a multi-step operation fails.
+These scripts are deliberately more cautious than the one-liners they replace. Depending on the operation they perform preflight discovery, refuse ambiguous storage mappings and shared references, check name/slot collisions, preserve or explicitly control guest state, create backups before direct `/etc/pve` edits, verify postconditions, and use rollback or conservative preservation when a multi-step transaction fails.
 
-The copy paths distinguish thin and regular LVs: sparse copying is used only for newly allocated thin destinations, while regular LVs receive full writes so skipped zero blocks cannot expose stale underlying data.
+The copy paths distinguish thin and regular LVs: sparse copying is used only for newly allocated thin destinations, while regular LVs receive full writes so skipped zero blocks cannot expose stale underlying data. LVM stderr is not globally hidden; only the three known repetitive thin-pool advisories are filtered, while unrelated warnings and errors remain visible.
 
-LVM stderr is not globally hidden. Only the three known repetitive thin-pool advisories are filtered; unrelated warnings and errors remain visible.
+Every mutating helper supports project dry-run semantics, and the integration suite enforces at least one exact-state dry-run case for every mutating public command. Refusal paths are tested the same way: the command must fail while the complete disposable state remains unchanged.
+
+The integration harness is intentionally fail-closed. It creates uniquely named loopback-backed test VGs/storage and dynamically allocated disposable QEMU/LXC guests, records ownership before mutation, and refuses cleanup if a guest identity/storage mapping no longer matches that ownership. Remaining mounts block guest/storage cleanup; remaining guests block storage/VG cleanup; remaining storage definitions block VG/loop cleanup. Pre-existing project backup paths are recorded before each run and are never removed as test artifacts.
+
+Protected-host comparisons include pre-existing VG/PV/LV metadata, canonical storage semantics, guest configuration checksums, local QEMU/LXC runtime state and firewall-file checksums. Dry-run/refusal snapshots additionally include disposable LV metadata and sampled content hashes, guest configs/status, test storage definitions, test files and mounts. Data-sensitive copy/move/import/export tests independently verify bytes with `cmp` or hashes.
 
 ## Tested on real Proxmox fixtures
 
-The v3.0.1 POSIX implementation was exercised by the repository's disposable integration suite against real Proxmox/LVM tooling, not just mocked command lines.
+The last fully documented real-Proxmox integration-validated POSIX baseline is **v3.0.1**, whose then-current 36-command suite completed cleanly with dry-run state unchanged and protected guest/LVM/storage state returned to baseline.
 
-The validated run covered all 36 command cases, including real `qm`, `pvesm`, LVM/device-mapper, mount/umount, `qemu-img`, storage move/import/export, snapshot, rename, delete, recovery and VMID-change operations. Dry-run before/after snapshots remained unchanged, and protected guest/LVM/storage state returned to baseline with no detected anomalies.
+The current **v3.4.2** release candidate contains 42 standalone helpers and an expanded **84-case** real integration definition plus static/CLI contracts. The suite now covers thin and regular LV copies, destructive-confirmation/refusal behavior, direct and partitioned mounts, shared-reference guards, hot/pause/stop/restart state modes, overwrite archive/delete/empty-target transactions, device slot/bus selectors, boot-order preservation, `vm-`/`base-` naming, QEMU/template/LXC VMID changes, QEMU/LXC network edits, and byte-preserving storage move/import/export paths.
 
-Version 3.2.2 keeps those overwrite semantics and fixes the rollback/identity path exposed by real Proxmox testing: replacement identity is verified by LV UUID across renames, rollback restores the displaced LV by UUID, and rollback never deletes an `unusedN` entry through `qm`. The integration matrix covers all 40 commands.
+The v3.4.2 harness also protects more host state than the earlier baseline: it records local guest runtime status and firewall checksums, samples disposable LV content for dry-run/refusal comparisons, and uses layered cleanup that stops rather than guessing when ownership cannot be proven.
 
-Version 3.2.3 also lets the two overwrite helpers create the requested `vm-DESTVMID-disk-N` when no active destination disk currently uses that number; the new disk is attached to the first free SCSI slot, while physical name collisions still fail safely.
-
-Version 3.3.0 expands all four `create-disk-*` helpers with exact source-slot selectors, exact or first-free destination bus/slot selection (`sata0`, `ide2`, `scsi4`, `virtio0`, or bare `sata|ide|scsi|virtio`), plus an optional `boot` keyword that promotes the actual destination slot to the front of the VM boot order.
-
-Run the same suite on your own host:
+Run the full current suite on a disposable or non-production Proxmox node:
 
 ```sh
 ./tests/run-all-tests.sh --run --verbose
 ```
 
-The integration harness creates uniquely named loopback-backed disposable VGs/thin pools and stopped test VMs, verifies each operation, ownership-checks cleanup, and compares protected state before and after.
+A v3.4.2 build should be described as **release-candidate / statically validated** until that real-host run finishes with zero failed cases and zero protected-state anomalies. The command-by-command behavior map is in [`tests/TEST-MATRIX.md`](tests/TEST-MATRIX.md).
 
 ## Why this exists
 
@@ -580,7 +615,7 @@ For VMID changes specifically, remember that changing a VMID is not an ordinary 
 - POSIX `/bin/sh`
 - root privileges or `sudo` for modifying operations
 - LVM/LVM-thin for the LVM-specific helpers
-- standard Proxmox/Linux tools used by the selected command (`qm`, `pct`, `pvesm`, LVM, `kpartx`, `findmnt`, `qemu-img`, etc.)
+- standard Proxmox/Linux tools used by the selected command (`qm`, `pct`, `pvesm`, LVM, `kpartx`, `partx`, `sfdisk`, `blkid`, `findmnt`, `qemu-img`, etc.)
 
 Read-only inspection helpers do not require elevation merely to run `--help`, `--version`, or their normal inspection paths where the host permits access.
 
@@ -601,6 +636,15 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [v3.2.2 static validation](docs/V3.2.2-STATIC-VALIDATION.md)
 - [v3.3.0 create-device selectors and boot](docs/V3.3.0-CREATE-DEVICE-SELECTORS-AND-BOOT.md)
 - [v3.3.0 static validation](docs/V3.3.0-STATIC-VALIDATION.md)
+- [v3.3.1 vm/base managed-volume support](docs/V3.3.1-VM-BASE-MANAGED-VOLUMES.md)
+- [v3.3.1 static validation](docs/V3.3.1-STATIC-VALIDATION.md)
+- [v3.4.0 numbering/filesystem inspection](docs/V3.4.0-INSPECTION-HELPERS.md)
+- [v3.4.0 static validation](docs/V3.4.0-STATIC-VALIDATION.md)
+- [v3.4.1 alternate-branch merge review](docs/V3.4.1-ALTERNATE-BRANCH-MERGE-REVIEW.md)
+- [v3.4.1 static validation](docs/V3.4.1-STATIC-VALIDATION.md)
+- [v3.4.2 full test/safety audit](docs/V3.4.2-TEST-AUDIT.md)
+- [v3.4.2 static validation](docs/V3.4.2-STATIC-VALIDATION.md)
+- [Current command-by-command test matrix](tests/TEST-MATRIX.md)
 - [v3.2.3 empty-target behavior](docs/V3.2.3-EMPTY-TARGET.md)
 - [v3.2.3 static validation](docs/V3.2.3-STATIC-VALIDATION.md)
 - [v3.2.1 overwrite disk-number fix](docs/V3.2.1-OVERWRITE-DISK-NUMBER-FIX.md)

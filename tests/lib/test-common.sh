@@ -144,7 +144,7 @@ require_command() { command -v "$1" >/dev/null 2>&1 || die "Required test comman
 
 require_proxmox_environment() {
     [ -d /etc/pve ] || die "/etc/pve is unavailable; integration tests must run on a Proxmox node."
-    for CMD in qm pvesm lvs vgs pvs lvcreate lvremove vgcreate vgremove pvcreate losetup truncate awk sed grep sort sha256sum findmnt mountpoint; do require_command "$CMD"; done
+    for CMD in qm pct pvesm lvs vgs pvs lvcreate lvremove vgcreate vgremove pvcreate losetup truncate awk sed grep sort sha256sum findmnt mountpoint; do require_command "$CMD"; done
 }
 
 # canonicalize_storage_config
@@ -191,19 +191,32 @@ canonicalize_storage_config() (
 
 # capture_protected_state PREFIX
 # Captures identities/checksums for pre-existing system objects. Test-owned
-# objects are not present when the baseline is captured.
+# objects are not present when the baseline is captured. Stable UUID/size/
+# pool/origin metadata is recorded as well as names so a resize/re-parenting
+# accident cannot hide behind an unchanged object name.
 capture_protected_state() (
     cps_prefix="$1"
-    vgs --noheadings -o vg_name 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sort > "${cps_prefix}.vgs"
-    pvs --noheadings --separator '|' -o pv_name,vg_name 2>/dev/null | sed 's/[[:space:]]//g' | sort > "${cps_prefix}.pvs"
-    lvs --noheadings --separator '|' -o vg_name,lv_name 2>/dev/null | sed 's/[[:space:]]//g' | sort > "${cps_prefix}.lvs"
+    vgs --noheadings --separator '|' -o vg_name,vg_uuid,vg_size,pv_count 2>/dev/null | sed 's/[[:space:]]//g' | sort > "${cps_prefix}.vgs"
+    pvs --noheadings --separator '|' -o pv_name,pv_uuid,vg_name,pv_size 2>/dev/null | sed 's/[[:space:]]//g' | sort > "${cps_prefix}.pvs"
+    lvs --noheadings --separator '|' -o vg_name,lv_name,lv_uuid,lv_size,pool_lv,origin 2>/dev/null | sed 's/[[:space:]]//g' | sort > "${cps_prefix}.lvs"
     canonicalize_storage_config > "${cps_prefix}.storage"
     find /etc/pve/nodes -type f \( -path '*/qemu-server/*.conf' -o -path '*/lxc/*.conf' \) -print 2>/dev/null | sort | while IFS= read -r cps_file; do sha256sum "$cps_file"; done > "${cps_prefix}.guests"
+    {
+        find /etc/pve/qemu-server -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null | sort | while IFS= read -r cps_file; do
+            cps_id="$(basename "$cps_file" .conf)"
+            printf 'qemu|%s|%s\n' "$cps_id" "$(qm status "$cps_id" 2>/dev/null | awk '{print $2}' || printf 'unknown')"
+        done
+        find /etc/pve/lxc -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null | sort | while IFS= read -r cps_file; do
+            cps_id="$(basename "$cps_file" .conf)"
+            printf 'lxc|%s|%s\n' "$cps_id" "$(pct status "$cps_id" 2>/dev/null | awk '{print $2}' || printf 'unknown')"
+        done
+    } | sort > "${cps_prefix}.guest-status"
+    find /etc/pve/firewall -maxdepth 1 -type f -print 2>/dev/null | sort | while IFS= read -r cps_file; do sha256sum "$cps_file"; done > "${cps_prefix}.firewall"
 )
 
 compare_protected_state() {
     capture_protected_state "$TEST_RESULT_DIR/after"
-    for cps_kind in vgs pvs lvs storage guests; do
+    for cps_kind in vgs pvs lvs storage guests guest-status firewall; do
         if ! cmp -s "$TEST_RESULT_DIR/baseline.$cps_kind" "$TEST_RESULT_DIR/after.$cps_kind"; then
             TEST_ANOMALY=$((TEST_ANOMALY + 1))
             print_warning "Protected-state difference detected in $cps_kind; inspect $TEST_RESULT_DIR/baseline.$cps_kind and after.$cps_kind"
@@ -234,15 +247,17 @@ test_prepare_run() {
     TEST_DATA_DIR="$TEST_WORK_DIR/data"
     TEST_VM_RESERVED="$TEST_WORK_DIR/reserved-vmids"
     TEST_VM_OWNED="$TEST_WORK_DIR/owned-vms"
+    TEST_CT_OWNED="$TEST_WORK_DIR/owned-cts"
     TEST_STORAGE_OWNED="$TEST_WORK_DIR/owned-storages"
     TEST_VG_OWNED="$TEST_WORK_DIR/owned-vgs"
-    mkdir -p "$TEST_RESULT_DIR"
-    capture_protected_state "$TEST_RESULT_DIR/baseline"
-    mkdir -p "$TEST_DATA_DIR"
+    TEST_BACKUP_BASELINE="$TEST_WORK_DIR/preexisting-project-backups"
+    mkdir -p "$TEST_RESULT_DIR" "$TEST_DATA_DIR"
     printf '%s\n' "PROXMOX_LVM_TOOLS_TEST_SANDBOX_V1" > "$TEST_WORK_DIR/.owner"
-    : > "$TEST_VM_RESERVED"; : > "$TEST_VM_OWNED"; : > "$TEST_STORAGE_OWNED"; : > "$TEST_VG_OWNED"
+    : > "$TEST_VM_RESERVED"; : > "$TEST_VM_OWNED"; : > "$TEST_CT_OWNED"; : > "$TEST_STORAGE_OWNED"; : > "$TEST_VG_OWNED"
+    capture_project_backup_baseline
+    capture_protected_state "$TEST_RESULT_DIR/baseline"
     TEST_VM_CURSOR=$((900000 + TEST_TOKEN_NUMBER % 50000))
-    export TEST_RUN_ID TEST_TOKEN TEST_VG_A TEST_VG_B TEST_POOL TEST_STORAGE_A TEST_STORAGE_B TEST_STORAGE_ALIAS TEST_RESULT_DIR TEST_WORK_DIR TEST_DATA_DIR
+    export TEST_RUN_ID TEST_TOKEN TEST_VG_A TEST_VG_B TEST_POOL TEST_STORAGE_A TEST_STORAGE_B TEST_STORAGE_ALIAS TEST_RESULT_DIR TEST_WORK_DIR TEST_DATA_DIR TEST_CT_OWNED
     trap 'test_emergency_cleanup "$?"' 0 HUP INT TERM
 }
 
@@ -279,6 +294,22 @@ create_storage_sandbox() {
     printf '%s|%s\n' "$TEST_STORAGE_B" "$TEST_VG_B" >> "$TEST_STORAGE_OWNED"
 }
 
+# create_regular_vg_sandbox
+# Adds one small loopback-only VG with no thin pool. Used only by tests that
+# must prove the regular-LV (non-sparse) copy path.
+create_regular_vg_sandbox() {
+    TEST_VG_REGULAR="plvtR${TEST_TOKEN}"
+    vgs "$TEST_VG_REGULAR" >/dev/null 2>&1 && die "Test VG collision: $TEST_VG_REGULAR"
+    TEST_LOOP_FILE_REGULAR="$TEST_WORK_DIR/${TEST_VG_REGULAR}.img"
+    truncate -s 256M "$TEST_LOOP_FILE_REGULAR"
+    TEST_LOOP_REGULAR="$(losetup --find --show "$TEST_LOOP_FILE_REGULAR")"
+    [ "$(losetup -j "$TEST_LOOP_FILE_REGULAR" | cut -d: -f1)" = "$TEST_LOOP_REGULAR" ] || die "Could not prove ownership of $TEST_LOOP_REGULAR."
+    pvcreate -ff -y "$TEST_LOOP_REGULAR" >/dev/null
+    vgcreate "$TEST_VG_REGULAR" "$TEST_LOOP_REGULAR" >/dev/null
+    printf '%s|%s|%s\n' "$TEST_VG_REGULAR" "$TEST_LOOP_REGULAR" "$TEST_LOOP_FILE_REGULAR" >> "$TEST_VG_OWNED"
+    export TEST_VG_REGULAR TEST_LOOP_FILE_REGULAR TEST_LOOP_REGULAR
+}
+
 allocate_free_vmid() {
     afv_attempts=0
     while [ "$afv_attempts" -lt 100000 ]; do
@@ -310,6 +341,32 @@ create_test_vm() {
     printf '%s\n' "$ctv_id"
 }
 
+register_owned_ct() {
+    roct_id="$1"; roct_hostname="$2"
+    grep -F "${roct_id}|" "$TEST_CT_OWNED" >/dev/null 2>&1 || printf '%s|%s\n' "$roct_id" "$roct_hostname" >> "$TEST_CT_OWNED"
+}
+
+create_test_ct() {
+    ctc_role="$1"
+    ctc_id="$(allocate_free_vmid)" || die "Could not allocate a free test CTID."
+    ctc_hostname="plvt-${TEST_TOKEN}-${ctc_role}"
+    cat > "/etc/pve/lxc/${ctc_id}.conf" <<EOF
+arch: amd64
+cores: 1
+hostname: $ctc_hostname
+memory: 128
+ostype: debian
+EOF
+    register_owned_ct "$ctc_id" "$ctc_hostname"
+    printf '%s\n' "$ctc_id"
+}
+
+attach_test_ct_lv() {
+    atc_id="$1"; atc_storage="$2"; atc_lv="$3"; atc_slot="${4:-rootfs}"; atc_size="${5:-16M}"
+    case "$atc_slot" in rootfs|mp[0-9]*) ;; *) die "Unsupported CT test storage slot: $atc_slot" ;; esac
+    printf '%s: %s:%s,size=%s\n' "$atc_slot" "$atc_storage" "$atc_lv" "$atc_size" >> "/etc/pve/lxc/${atc_id}.conf"
+}
+
 create_thin_lv() {
     ctl_vg="$1"
     ctl_name="$2"
@@ -339,38 +396,180 @@ add_storage_alias() {
     printf '%s|%s\n' "$TEST_STORAGE_ALIAS" "$TEST_VG_A" >> "$TEST_STORAGE_OWNED"
 }
 
+
+# capture_project_backup_baseline
+# Records pre-existing project-style backup paths so cleanup never removes
+# something that was already present before this test group started.
+capture_project_backup_baseline() {
+    : > "$TEST_BACKUP_BASELINE"
+    find /root -maxdepth 1 \( \
+        -name '*.conf.before-*' -o \
+        -name 'change-vmid-backup-*' -o \
+        -name 'change-storage-prefix-*' \
+    \) -print 2>/dev/null | sort -u > "$TEST_BACKUP_BASELINE"
+}
+
+backup_was_preexisting() {
+    bwp_path="$1"
+    [ -f "$TEST_BACKUP_BASELINE" ] || return 1
+    grep -Fx "$bwp_path" "$TEST_BACKUP_BASELINE" >/dev/null 2>&1
+}
+
+# test_storage_mapping_owned STORAGE_ID
+# Returns success only when STORAGE_ID was registered by this test group and
+# still maps to the exact disposable VG recorded at creation time.
+test_storage_mapping_owned() {
+    tsmo_id="$1"
+    tsmo_vg="$(awk -F'|' -v id="$tsmo_id" '$1==id {print $2; exit}' "$TEST_STORAGE_OWNED" 2>/dev/null || :)"
+    [ -n "$tsmo_vg" ] || return 1
+    storage_owned_by_test "$tsmo_id" "$tsmo_vg"
+}
+
+# vm_references_only_test_storage VMID
+# Cleanup guard: a test VM is never purged if any storage-backed disk currently
+# points at a storage ID that the harness cannot still prove is test-owned.
+vm_references_only_test_storage() {
+    vrot_id="$1"
+    vrot_ids="$(qm config "$vrot_id" 2>/dev/null | awk -F': ' '
+        $1 ~ /^(scsi|sata|virtio|ide|unused|efidisk|tpmstate)[0-9]+$/ {
+            split($2,a,",")
+            v=a[1]
+            if (v ~ /^[^:]+:/) {
+                s=v
+                sub(/:.*/,"",s)
+                print s
+            }
+        }
+    ' | sort -u)"
+    for vrot_storage in $vrot_ids; do
+        test_storage_mapping_owned "$vrot_storage" || {
+            print_warning "VM $vrot_id references storage '$vrot_storage', which is not provably owned by this test run."
+            return 1
+        }
+    done
+    return 0
+}
+
+# ct_references_only_test_storage CTID
+# Cleanup guard equivalent for LXC rootfs/mpN references.
+ct_references_only_test_storage() {
+    crts_id="$1"
+    crts_cfg="/etc/pve/lxc/${crts_id}.conf"
+    [ -f "$crts_cfg" ] || return 1
+    awk -F': ' '
+        $1=="rootfs" || $1 ~ /^mp[0-9]+$/ {
+            split($2,a,",")
+            if (a[1] ~ /^[^:]+:.+/) print a[1]
+        }
+    ' "$crts_cfg" | while IFS= read -r crts_volid; do
+        [ -n "$crts_volid" ] || continue
+        crts_sid="${crts_volid%%:*}"
+        test_storage_mapping_owned "$crts_sid" || exit 1
+    done
+}
+
+# sample_lv_content PATH
+# Emits small first/last-block hashes for a test-owned LV. This strengthens
+# dry-run proofs without hashing every byte of every virtual disk.
+sample_lv_content() (
+    slc_path="$1"
+    slc_size="$(blockdev --getsize64 "$slc_path" 2>/dev/null || :)"
+    case "$slc_size" in ''|*[!0-9]*) exit 0 ;; esac
+    slc_first="$(dd if="$slc_path" bs=4096 count=16 status=none 2>/dev/null | sha256sum | awk '{print $1}')"
+    if [ "$slc_size" -gt 65536 ]; then
+        slc_blocks=$((slc_size / 4096))
+        [ "$slc_blocks" -gt 16 ] || slc_blocks=16
+        slc_skip=$((slc_blocks - 16))
+        slc_last="$(dd if="$slc_path" bs=4096 skip="$slc_skip" count=16 status=none 2>/dev/null | sha256sum | awk '{print $1}')"
+    else
+        slc_last="$slc_first"
+    fi
+    printf '%s|%s|%s|%s\n' "$slc_path" "$slc_size" "$slc_first" "$slc_last"
+)
+
 ############################################################
 # DRY-RUN STATE PROOF
 ############################################################
 
 # snapshot_test_owned_state FILE
-# Records only test-owned LVM, VM, storage and sandbox-file state so a dry-run
-# can be proven not to have changed its fixtures.
+# Records test-owned LVM metadata, sampled LV contents, VM configs/status,
+# storage mappings, sandbox-file hashes and mounts so dry-run/negative tests can
+# prove both metadata and representative data bytes remained unchanged.
 snapshot_test_owned_state() (
     stos_file="$1"
     {
-        printf '%s\n' '[LVM]'
-        lvs --noheadings --separator '|' -o vg_name,lv_name,lv_size,pool_lv,origin 2>/dev/null | sed 's/[[:space:]]//g' | grep -E "^(${TEST_VG_A}|${TEST_VG_B})\|" || :
-        printf '%s\n' '[VMS]'
+        printf '%s
+' '[LVM]'
+        if [ -s "$TEST_VG_OWNED" ]; then
+            cut -d'|' -f1 "$TEST_VG_OWNED" | sort -u | while IFS= read -r stos_vg; do
+                [ -n "$stos_vg" ] || continue
+                lvs --noheadings --separator '|' -o vg_name,lv_name,lv_uuid,lv_size,pool_lv,origin "$stos_vg" 2>/dev/null | sed 's/[[:space:]]//g' || :
+            done
+        fi
+
+        printf '%s
+' '[LV-SAMPLES]'
+        if [ -s "$TEST_VG_OWNED" ]; then
+            cut -d'|' -f1 "$TEST_VG_OWNED" | sort -u | while IFS= read -r stos_vg; do
+                [ -n "$stos_vg" ] || continue
+                lvs --noheadings -o lv_path,lv_attr "$stos_vg" 2>/dev/null | awk '$1!="" && $2 !~ /^t/ {print $1}' | while IFS= read -r stos_lv; do
+                    [ -b "$stos_lv" ] || continue
+                    sample_lv_content "$stos_lv"
+                done
+            done
+        fi
+
+        printf '%s
+' '[VMS]'
         if [ -f "$TEST_VM_OWNED" ]; then
             while IFS='|' read -r stos_id stos_name; do
                 [ -n "$stos_id" ] || continue
                 if [ -f "/etc/pve/qemu-server/${stos_id}.conf" ]; then
-                    printf 'VM:%s:%s\n' "$stos_id" "$stos_name"
+                    printf 'VM:%s:%s
+' "$stos_id" "$stos_name"
                     sed 's/[[:space:]]*$//' "/etc/pve/qemu-server/${stos_id}.conf"
+                    printf 'STATUS:%s:%s
+' "$stos_id" "$(qm status "$stos_id" 2>/dev/null | awk '{print $2}' || :)"
                 fi
             done < "$TEST_VM_OWNED"
         fi
-        printf '%s\n' '[STORAGE]'
+
+        printf '%s\n' '[CTS]'
+        if [ -f "$TEST_CT_OWNED" ]; then
+            while IFS='|' read -r stos_id stos_hostname; do
+                [ -n "$stos_id" ] || continue
+                if [ -f "/etc/pve/lxc/${stos_id}.conf" ]; then
+                    printf 'CT:%s:%s\n' "$stos_id" "$stos_hostname"
+                    sed 's/[[:space:]]*$//' "/etc/pve/lxc/${stos_id}.conf"
+                    printf 'STATUS:%s:%s\n' "$stos_id" "$(pct status "$stos_id" 2>/dev/null | awk '{print $2}' || :)"
+                fi
+            done < "$TEST_CT_OWNED"
+        fi
+
+        printf '%s
+' '[STORAGE]'
         if [ -f /etc/pve/storage.cfg ]; then
             awk -v a="$TEST_STORAGE_A" -v b="$TEST_STORAGE_B" -v c="$TEST_STORAGE_ALIAS" '
-                /^[^ \t].*:/ { show=($2==a || $2==b || $2==c) }
+                /^[^ 	].*:/ { show=($2==a || $2==b || $2==c) }
                 show { print }
             ' /etc/pve/storage.cfg
         fi
-        printf '%s\n' '[FILES]'
-        find "$TEST_DATA_DIR" -mindepth 1 -printf '%P|%y|%s\n' 2>/dev/null | sort
-        printf '%s\n' '[MOUNTS]'
+
+        printf '%s
+' '[FILES]'
+        if [ -d "$TEST_DATA_DIR" ]; then
+            find "$TEST_DATA_DIR" -type f -print 2>/dev/null | sort | while IFS= read -r stos_path; do
+                stos_rel="${stos_path#"$TEST_DATA_DIR"/}"
+                stos_hash="$(sha256sum "$stos_path" | awk '{print $1}')"
+                printf '%s|%s|%s
+' "$stos_rel" "$(stat -c %s "$stos_path" 2>/dev/null || printf '?')" "$stos_hash"
+            done
+            find "$TEST_DATA_DIR" -mindepth 1 ! -type f -printf '%P|%y
+' 2>/dev/null | sort
+        fi
+
+        printf '%s
+' '[MOUNTS]'
         findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk -v p="$TEST_WORK_DIR/" 'index($2,p)==1 {print}'
     } | sort > "$stos_file"
 )
@@ -394,6 +593,31 @@ run_dryrun_unchanged() {
     fi
 }
 
+
+# run_expect_fail_unchanged NAME SCRIPT ARGS...
+# Executes a deliberately invalid/preflight-refused command and requires a
+# nonzero exit plus exact equality of all test-owned state around the failure.
+run_expect_fail_unchanged() {
+    refu_name="$1"
+    refu_script="$2"
+    shift 2
+    refu_before="$TEST_RESULT_DIR/refusal-before-$(printf '%s' "$refu_name" | tr ' /:' '---')"
+    refu_after="$TEST_RESULT_DIR/refusal-after-$(printf '%s' "$refu_name" | tr ' /:' '---')"
+    refu_log="$TEST_RESULT_DIR/refusal-output-$(printf '%s' "$refu_name" | tr ' /:' '---').log"
+    snapshot_test_owned_state "$refu_before"
+    if project_cmd "$refu_script" "$@" >"$refu_log" 2>&1; then
+        printf 'Expected command to fail safely, but it succeeded: %s\n' "$refu_name" >&2
+        return 1
+    fi
+    snapshot_test_owned_state "$refu_after"
+    if ! cmp -s "$refu_before" "$refu_after"; then
+        diff -u "$refu_before" "$refu_after" || :
+        printf 'Refused command changed test-owned state: %s\n' "$refu_name" >&2
+        return 1
+    fi
+    return 0
+}
+
 ############################################################
 # OWNERSHIP-SAFE CLEANUP
 ############################################################
@@ -415,11 +639,19 @@ cleanup_test_backups() {
         [ -n "$ctb_id" ] || continue
         for ctb_path in /root/"${ctb_id}".conf.before-* /root/change-vmid-backup-"${ctb_id}"-to-* /root/change-vmid-backup-*-to-"${ctb_id}"-*; do
             [ -e "$ctb_path" ] || continue
+            if backup_was_preexisting "$ctb_path"; then
+                print_warning "Refusing to remove pre-existing backup path: $ctb_path"
+                continue
+            fi
             rm -rf -- "$ctb_path"
         done
     done < "$TEST_VM_RESERVED"
     for ctb_path in /root/change-storage-prefix-"${TEST_STORAGE_A}"-to-"${TEST_STORAGE_ALIAS}"-* /root/change-storage-prefix-"${TEST_STORAGE_ALIAS}"-to-"${TEST_STORAGE_A}"-*; do
         [ -e "$ctb_path" ] || continue
+        if backup_was_preexisting "$ctb_path"; then
+            print_warning "Refusing to remove pre-existing backup path: $ctb_path"
+            continue
+        fi
         rm -rf -- "$ctb_path"
     done
 }
@@ -431,6 +663,25 @@ cleanup_test_mounts() {
     done
 }
 
+cleanup_test_cts() {
+    [ -f "$TEST_CT_OWNED" ] || return 0
+    while IFS='|' read -r ctc_id ctc_expected; do
+        [ -n "$ctc_id" ] || continue
+        [ -f "/etc/pve/lxc/${ctc_id}.conf" ] || continue
+        ctc_actual="$(pct config "$ctc_id" 2>/dev/null | sed -n 's/^hostname:[[:space:]]*//p' | head -n1)"
+        if [ "$ctc_actual" != "$ctc_expected" ]; then
+            print_warning "Refusing to destroy CT $ctc_id: expected test hostname '$ctc_expected', found '$ctc_actual'."
+            continue
+        fi
+        if ! ct_references_only_test_storage "$ctc_id"; then
+            print_warning "Refusing to destroy CT $ctc_id because one or more storage references are not provably test-owned."
+            continue
+        fi
+        if [ "$(pct status "$ctc_id" 2>/dev/null | awk '{print $2}')" != "stopped" ]; then pct stop "$ctc_id" >/dev/null 2>&1 || :; fi
+        pct destroy "$ctc_id" --purge 1 >/dev/null 2>&1 || print_warning "Could not destroy test CT $ctc_id."
+    done < "$TEST_CT_OWNED"
+}
+
 cleanup_test_vms() {
     [ -f "$TEST_VM_OWNED" ] || return 0
     while IFS='|' read -r ctv_id ctv_expected; do
@@ -439,6 +690,10 @@ cleanup_test_vms() {
         ctv_actual="$(qm config "$ctv_id" 2>/dev/null | sed -n 's/^name:[[:space:]]*//p' | head -n1)"
         if [ "$ctv_actual" != "$ctv_expected" ]; then
             print_warning "Refusing to destroy VM $ctv_id: expected test name '$ctv_expected', found '$ctv_actual'."
+            continue
+        fi
+        if ! vm_references_only_test_storage "$ctv_id"; then
+            print_warning "Refusing to destroy VM $ctv_id because one or more storage references are not provably test-owned."
             continue
         fi
         if [ "$(qm status "$ctv_id" 2>/dev/null | awk '{print $2}')" != "stopped" ]; then qm stop "$ctv_id" >/dev/null 2>&1 || :; fi
@@ -462,21 +717,96 @@ cleanup_test_vgs_and_loops() {
         [ -n "$ctvl_vg" ] || continue
         if vgs "$ctvl_vg" >/dev/null 2>&1; then
             ctvl_pvs="$(pvs --noheadings --separator '|' -o pv_name,vg_name 2>/dev/null | awk -F'|' -v vg="$ctvl_vg" '{gsub(/[[:space:]]/,"",$1);gsub(/[[:space:]]/,"",$2);if($2==vg)print $1}')"
-            if [ "$ctvl_pvs" = "$ctvl_loop" ]; then vgremove -ff -y "$ctvl_vg" >/dev/null 2>&1 || print_warning "Could not remove test VG $ctvl_vg."
-            else print_warning "Refusing to remove VG $ctvl_vg because its PV ownership changed."; fi
+            if [ "$ctvl_pvs" != "$ctvl_loop" ]; then
+                print_warning "Refusing to remove VG $ctvl_vg because its PV ownership changed."
+                continue
+            fi
+            if ! vgremove -ff -y "$ctvl_vg" >/dev/null 2>&1; then
+                print_warning "Could not remove test VG $ctvl_vg; retaining its loop device."
+                continue
+            fi
         fi
-        if losetup -j "$ctvl_file" 2>/dev/null | grep -F "${ctvl_loop}:" >/dev/null 2>&1; then losetup -d "$ctvl_loop" >/dev/null 2>&1 || print_warning "Could not detach test loop $ctvl_loop."; fi
+        if vgs "$ctvl_vg" >/dev/null 2>&1; then
+            print_warning "Test VG $ctvl_vg still exists; retaining its loop device."
+            continue
+        fi
+        if losetup -j "$ctvl_file" 2>/dev/null | grep -F "${ctvl_loop}:" >/dev/null 2>&1; then
+            losetup -d "$ctvl_loop" >/dev/null 2>&1 || print_warning "Could not detach test loop $ctvl_loop."
+        fi
     done
+}
+
+test_mounts_remain() {
+    findmnt -rn -o TARGET 2>/dev/null | awk -v p="$TEST_WORK_DIR/" 'index($1,p)==1 {found=1} END {exit(found ? 0 : 1)}'
+}
+
+owned_guest_configs_remain() {
+    if [ -f "$TEST_VM_OWNED" ]; then
+        while IFS='|' read -r ogcr_id ogcr_name; do
+            [ -n "$ogcr_id" ] || continue
+            [ ! -f "/etc/pve/qemu-server/${ogcr_id}.conf" ] || return 0
+        done < "$TEST_VM_OWNED"
+    fi
+    if [ -f "$TEST_CT_OWNED" ]; then
+        while IFS='|' read -r ogcr_id ogcr_name; do
+            [ -n "$ogcr_id" ] || continue
+            [ ! -f "/etc/pve/lxc/${ogcr_id}.conf" ] || return 0
+        done < "$TEST_CT_OWNED"
+    fi
+    return 1
+}
+
+owned_storage_entries_remain() {
+    [ -f "$TEST_STORAGE_OWNED" ] || return 1
+    while IFS='|' read -r oser_id oser_vg; do
+        [ -n "$oser_id" ] || continue
+        if awk -v id="$oser_id" '
+            /^[^[:space:]][^:]*:[[:space:]]*/ { if ($2==id) found=1 }
+            END { exit(found ? 0 : 1) }
+        ' /etc/pve/storage.cfg 2>/dev/null; then return 0; fi
+    done < "$TEST_STORAGE_OWNED"
+    return 1
+}
+
+owned_vgs_or_loops_remain() {
+    [ -f "$TEST_VG_OWNED" ] || return 1
+    while IFS='|' read -r ovlr_vg ovlr_loop ovlr_file; do
+        [ -n "$ovlr_vg" ] || continue
+        vgs "$ovlr_vg" >/dev/null 2>&1 && return 0
+        losetup -j "$ovlr_file" 2>/dev/null | grep -F "${ovlr_loop}:" >/dev/null 2>&1 && return 0
+    done < "$TEST_VG_OWNED"
+    return 1
 }
 
 test_cleanup_sandbox() {
     [ -n "${TEST_WORK_DIR:-}" ] || return 0
     [ -f "$TEST_WORK_DIR/.owner" ] || { print_warning "Sandbox marker missing; refusing cleanup: $TEST_WORK_DIR"; return 0; }
     [ "$(cat "$TEST_WORK_DIR/.owner" 2>/dev/null)" = "PROXMOX_LVM_TOOLS_TEST_SANDBOX_V1" ] || { print_warning "Sandbox ownership marker is invalid; refusing cleanup."; return 0; }
+
     cleanup_test_mounts
+    if test_mounts_remain; then
+        print_warning "One or more disposable mounts remain; refusing deeper cleanup and retaining sandbox evidence: $TEST_WORK_DIR"
+        return 0
+    fi
+    cleanup_test_cts
     cleanup_test_vms
+    if owned_guest_configs_remain; then
+        print_warning "One or more disposable guest configs remain; refusing storage/VG cleanup and retaining sandbox evidence: $TEST_WORK_DIR"
+        return 0
+    fi
+
     cleanup_test_storages
+    if owned_storage_entries_remain; then
+        print_warning "One or more disposable storage definitions remain; refusing VG/loop cleanup and retaining sandbox evidence: $TEST_WORK_DIR"
+        return 0
+    fi
+
     cleanup_test_vgs_and_loops
+    if owned_vgs_or_loops_remain; then
+        print_warning "One or more disposable VGs/loops remain; retaining sandbox evidence: $TEST_WORK_DIR"
+        return 0
+    fi
+
     cleanup_test_backups
     rm -rf -- "$TEST_WORK_DIR"
 }

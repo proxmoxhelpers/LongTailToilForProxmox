@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"
-    TEST_SUITE_VERSION="2.4.0"
+    PROJECT_VERSION="3.4.2"
+    TEST_SUITE_VERSION="2.8.0"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -28,8 +28,14 @@ main() {
     test_prepare_run
     create_storage_sandbox
     prepare_copy_fixture
-    run_case "create-disk-snapshot-and-add-to-vm.sh" test_create_snapshot_add
-    run_case "create-disk-copy-and-add-to-vm.sh" test_create_copy_add
+    run_case "create-disk-snapshot-and-add-to-vm.sh hot + first-free bus + boot preservation" test_create_snapshot_add
+    run_case "create-disk-copy-and-add-to-vm.sh hot + exact slot + boot preservation" test_create_copy_add
+    run_case "create add helpers pause/stop/restart source-state modes" test_create_add_state_modes
+    run_case "create add helpers refuse occupied exact destination slot" test_create_add_occupied_slot_refusal
+    run_case "all four create helpers refuse ambiguous source disk-N" test_create_source_ambiguity_refusal
+    run_case "create-disk-snapshot-and-add-to-vm.sh base/template naming" test_create_base_snapshot_add
+    run_case "create-disk-copy-and-add-to-vm.sh base/template naming" test_create_base_copy_add
+    run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh base/template naming" test_create_base_snapshot_overwrite
     run_case "create-disk-copy-and-overwrite-disk-on-vm.sh preserve + same disk number" test_create_copy_overwrite
     run_case "create-disk-copy-and-overwrite-disk-on-vm.sh delete + same disk number" test_create_copy_overwrite_delete
     run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh preserve + same disk number" test_create_snapshot_overwrite
@@ -53,8 +59,8 @@ end() {
 
 print_plan() {
     print_banner "Copy / snapshot tests"
-    printf '%s\n' "Creates stopped source/destination VMs and a 32 MiB thin source disk."
-    printf '%s\n' "Tests source-by-slot, exact/bare-bus destinations, boot-order promotion, copies/snapshots, overwrite/archive/delete behavior, and empty-target creation."
+    printf '%s\n' "Creates only disposable source/destination VMs and 16-32 MiB loopback-backed thin disks; selected state-mode cases briefly run test VMs."
+    printf '%s\n' "Covers vm/base sources, path/disk/slot selectors, occupied/exact/first-free destinations, boot-order preservation, hot/pause/stop/restart, copy/snapshot, overwrite/archive/delete, archive-number collision, empty targets and ambiguity refusal."
     printf '%s\n' "All resulting volumes remain in disposable test storages and are removed during ownership-checked cleanup."
 }
 
@@ -65,6 +71,19 @@ print_plan() {
 prepare_copy_fixture() {
     COPY_SRC_VM="$(create_test_vm copy-src)"
     COPY_DST_VM="$(create_test_vm copy-dst)"
+    COPY_DST_SEED_NAME="vm-${COPY_DST_VM}-disk-99"
+    COPY_DST_SEED_LV="$(create_thin_lv "$TEST_VG_A" "$COPY_DST_SEED_NAME" 16M)"
+    attach_test_lv "$COPY_DST_VM" "$TEST_STORAGE_A" "$COPY_DST_SEED_NAME" sata0
+    qm set "$COPY_DST_VM" --boot "order=sata0" >/dev/null
+
+    COPY_ADD_DST_VM="$(create_test_vm copy-add-dst)"
+    COPY_ADD_DST_SEED_NAME="vm-${COPY_ADD_DST_VM}-disk-99"
+    COPY_ADD_DST_SEED_LV="$(create_thin_lv "$TEST_VG_A" "$COPY_ADD_DST_SEED_NAME" 16M)"
+    attach_test_lv "$COPY_ADD_DST_VM" "$TEST_STORAGE_A" "$COPY_ADD_DST_SEED_NAME" sata0
+    qm set "$COPY_ADD_DST_VM" --boot "order=sata0" >/dev/null
+
+    COPY_STATE_DST_VM="$(create_test_vm copy-state-dst)"
+
     COPY_SRC_LV_NAME="vm-${COPY_SRC_VM}-disk-0"
     COPY_SRC_LV="$(create_thin_lv "$TEST_VG_A" "$COPY_SRC_LV_NAME" 32M)"
     write_test_pattern "$COPY_SRC_LV" "copy-snapshot-source"
@@ -75,12 +94,18 @@ prepare_copy_fixture() {
     COPY_OVERWRITE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_OLD_NAME" 32M)"
     write_test_pattern "$COPY_OVERWRITE_OLD_LV" "copy-overwrite-old"
     attach_test_lv "$COPY_OVERWRITE_VM" "$TEST_STORAGE_B" "$COPY_OVERWRITE_OLD_NAME" scsi0
+    COPY_OVERWRITE_OCCUPIED_ARCHIVE_NAME="vm-${COPY_OVERWRITE_VM}-disk-901"
+    COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV="$(create_thin_lv "$TEST_VG_B" "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_NAME" 16M)"
+    COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)"
 
     SNAP_OVERWRITE_VM="$(create_test_vm snapshot-overwrite)"
     SNAP_OVERWRITE_OLD_NAME="vm-${SNAP_OVERWRITE_VM}-disk-0"
     SNAP_OVERWRITE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_OLD_NAME" 32M)"
     write_test_pattern "$SNAP_OVERWRITE_OLD_LV" "snapshot-overwrite-old"
     attach_test_lv "$SNAP_OVERWRITE_VM" "$TEST_STORAGE_B" "$SNAP_OVERWRITE_OLD_NAME" scsi0
+    SNAP_OVERWRITE_OCCUPIED_ARCHIVE_NAME="vm-${SNAP_OVERWRITE_VM}-disk-901"
+    SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV="$(create_thin_lv "$TEST_VG_B" "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_NAME" 16M)"
+    SNAP_OVERWRITE_OCCUPIED_ARCHIVE_UUID="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)"
 
 
     COPY_OVERWRITE_DELETE_VM="$(create_test_vm copy-overwrite-delete)"
@@ -97,6 +122,37 @@ prepare_copy_fixture() {
 
     COPY_EMPTY_VM="$(create_test_vm copy-empty-target)"
     SNAP_EMPTY_VM="$(create_test_vm snapshot-empty-target)"
+
+    BASE_SRC_VM="$(create_test_vm base-copy-src)"
+    BASE_SRC_SEED="vm-${BASE_SRC_VM}-disk-0"
+    BASE_SRC_SEED_LV="$(create_thin_lv "$TEST_VG_A" "$BASE_SRC_SEED" 32M)"
+    write_test_pattern "$BASE_SRC_SEED_LV" "base-copy-source"
+    attach_test_lv "$BASE_SRC_VM" "$TEST_STORAGE_A" "$BASE_SRC_SEED" scsi0
+    qm template "$BASE_SRC_VM" >/dev/null
+    BASE_SRC_NAME="base-${BASE_SRC_VM}-disk-0"
+    BASE_SRC_LV="/dev/${TEST_VG_A}/${BASE_SRC_NAME}"
+    assert_lv_exists "$TEST_VG_A/$BASE_SRC_NAME"
+
+    BASE_DST_VM="$(create_test_vm base-copy-dst)"
+    BASE_DST_SEED="vm-${BASE_DST_VM}-disk-0"
+    create_thin_lv "$TEST_VG_A" "$BASE_DST_SEED" 16M >/dev/null
+    attach_test_lv "$BASE_DST_VM" "$TEST_STORAGE_A" "$BASE_DST_SEED" scsi0
+    qm template "$BASE_DST_VM" >/dev/null
+    assert_lv_exists "$TEST_VG_A/base-${BASE_DST_VM}-disk-0"
+
+    BASE_COPY_DST_VM="$(create_test_vm base-copy-independent-dst)"
+    BASE_COPY_DST_SEED="vm-${BASE_COPY_DST_VM}-disk-0"
+    create_thin_lv "$TEST_VG_A" "$BASE_COPY_DST_SEED" 16M >/dev/null
+    attach_test_lv "$BASE_COPY_DST_VM" "$TEST_STORAGE_A" "$BASE_COPY_DST_SEED" scsi0
+    qm template "$BASE_COPY_DST_VM" >/dev/null
+    assert_lv_exists "$TEST_VG_A/base-${BASE_COPY_DST_VM}-disk-0"
+
+    BASE_OVERWRITE_VM="$(create_test_vm base-overwrite)"
+    BASE_OVERWRITE_SEED="vm-${BASE_OVERWRITE_VM}-disk-0"
+    create_thin_lv "$TEST_VG_B" "$BASE_OVERWRITE_SEED" 32M >/dev/null
+    attach_test_lv "$BASE_OVERWRITE_VM" "$TEST_STORAGE_B" "$BASE_OVERWRITE_SEED" scsi0
+    qm template "$BASE_OVERWRITE_VM" >/dev/null
+    assert_lv_exists "$TEST_VG_B/base-${BASE_OVERWRITE_VM}-disk-0"
 }
 
 ############################################################
@@ -104,32 +160,125 @@ prepare_copy_fixture() {
 ############################################################
 
 test_create_snapshot_add() {
-    run_dryrun_unchanged "create-snapshot-add" create-disk-snapshot-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" sata boot
-    project_cmd create-disk-snapshot-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" sata boot
-    tcsa_volid="$(qm config "$COPY_DST_VM" | sed -n 's/^sata0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    qm start "$COPY_SRC_VM" >/dev/null
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
+
+    run_dryrun_unchanged "create-snapshot-add" create-disk-snapshot-and-add-to-vm.sh hot "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" sata boot
+    project_cmd create-disk-snapshot-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" sata boot hot
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
+
+    tcsa_volid="$(qm config "$COPY_DST_VM" | sed -n 's/^sata1:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ -n "$tcsa_volid" ]
     lvs --noheadings -o origin "$(pvesm path "$tcsa_volid")" 2>/dev/null | grep -F "$COPY_SRC_LV_NAME" >/dev/null
-    qm config "$COPY_DST_VM" | grep -qE '^boot:.*order=sata0([;,]|$)'
+    qm config "$COPY_DST_VM" | grep -qE '^boot:.*order=sata1;sata0([;,]|$)'
 }
 
 test_create_copy_add() {
-    run_dryrun_unchanged "create-copy-add" create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" virtio0 "$TEST_VG_B" boot
-    project_cmd create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" virtio0 "$TEST_VG_B" boot
-    tcca_volid="$(qm config "$COPY_DST_VM" | sed -n 's/^virtio0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
-    case "$tcca_volid" in "$TEST_STORAGE_B":vm-"${COPY_DST_VM}"-disk-*) ;; *) return 1 ;; esac
+    if [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" != "running" ]; then qm start "$COPY_SRC_VM" >/dev/null; fi
+    run_dryrun_unchanged "create-copy-add" create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_ADD_DST_VM" virtio0 "$TEST_VG_B" boot
+    project_cmd create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_ADD_DST_VM" virtio0 "$TEST_VG_B" boot
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
+
+    tcca_volid="$(qm config "$COPY_ADD_DST_VM" | sed -n 's/^virtio0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    case "$tcca_volid" in "$TEST_STORAGE_B":vm-"${COPY_ADD_DST_VM}"-disk-*) ;; *) return 1 ;; esac
     cmp -n 33554432 "$COPY_SRC_LV" "$(pvesm path "$tcca_volid")"
-    qm config "$COPY_DST_VM" | grep -qE '^boot:.*order=virtio0([;,]|$)'
+    qm config "$COPY_ADD_DST_VM" | grep -qE '^boot:.*order=virtio0;sata0([;,]|$)'
+}
+
+test_create_add_state_modes() {
+    if [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" != "running" ]; then qm start "$COPY_SRC_VM" >/dev/null; fi
+
+    run_dryrun_unchanged "create-snapshot-add-pause" create-disk-snapshot-and-add-to-vm.sh pause "$COPY_SRC_LV" "$COPY_STATE_DST_VM" ide
+    project_cmd create-disk-snapshot-and-add-to-vm.sh "$COPY_SRC_LV" "$COPY_STATE_DST_VM" ide pause
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
+    tsa_pause_volid="$(qm config "$COPY_STATE_DST_VM" | sed -n 's/^ide0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    [ "$(lvs --noheadings -o origin "$(pvesm path "$tsa_pause_volid")" | trim)" = "$COPY_SRC_LV_NAME" ]
+
+    run_dryrun_unchanged "create-copy-add-stop" create-disk-copy-and-add-to-vm.sh stop "$COPY_SRC_VM" disk-0 "$COPY_STATE_DST_VM" sata "$TEST_VG_B"
+    project_cmd create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_STATE_DST_VM" sata "$TEST_VG_B" stop
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "stopped" ]
+
+    qm start "$COPY_SRC_VM" >/dev/null
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
+    run_dryrun_unchanged "create-copy-add-restart" create-disk-copy-and-add-to-vm.sh restart "$COPY_SRC_VM" scsi0 "$COPY_STATE_DST_VM" virtio "$TEST_VG_B"
+    project_cmd create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_STATE_DST_VM" virtio "$TEST_VG_B" restart
+    [ "$(qm status "$COPY_SRC_VM" | awk '{print $2}')" = "running" ]
+}
+
+test_create_add_occupied_slot_refusal() {
+    run_expect_fail_unchanged "snapshot-add-occupied-sata0" create-disk-snapshot-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" sata0
+    run_expect_fail_unchanged "copy-add-occupied-sata0" create-disk-copy-and-add-to-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" sata0 "$TEST_VG_B"
+}
+
+test_create_source_ambiguity_refusal() {
+    tcsar_src="$(create_test_vm create-ambiguous-src)"
+    tcsar_dst="$(create_test_vm create-ambiguous-dst)"
+    tcsar_foreign="$(allocate_free_vmid)"
+    tcsar_vm_name="vm-${tcsar_src}-disk-0"
+    tcsar_base_name="base-${tcsar_foreign}-disk-0"
+    create_thin_lv "$TEST_VG_A" "$tcsar_vm_name" 16M >/dev/null
+    create_thin_lv "$TEST_VG_A" "$tcsar_base_name" 16M >/dev/null
+    attach_test_lv "$tcsar_src" "$TEST_STORAGE_A" "$tcsar_vm_name" scsi0
+    attach_test_lv "$tcsar_src" "$TEST_STORAGE_A" "$tcsar_base_name" scsi1
+
+    run_expect_fail_unchanged "copy-add-ambiguous-source" create-disk-copy-and-add-to-vm.sh "$tcsar_src" disk-0 "$tcsar_dst" scsi0 "$TEST_VG_B"
+    run_expect_fail_unchanged "snapshot-add-ambiguous-source" create-disk-snapshot-and-add-to-vm.sh "$tcsar_src" disk-0 "$tcsar_dst" scsi0
+    run_expect_fail_unchanged "copy-overwrite-ambiguous-source" create-disk-copy-and-overwrite-disk-on-vm.sh "$tcsar_src" disk-0 "$tcsar_dst" scsi0
+    run_expect_fail_unchanged "snapshot-overwrite-ambiguous-source" create-disk-snapshot-and-overwrite-disk-on-vm.sh "$tcsar_src" disk-0 "$tcsar_dst" scsi0
+}
+
+test_create_base_snapshot_add() {
+    tcbsa_name="base-${BASE_DST_VM}-disk-1"
+    run_dryrun_unchanged "create-base-snapshot-add" create-disk-snapshot-and-add-to-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_DST_VM" scsi1
+    project_cmd create-disk-snapshot-and-add-to-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_DST_VM" scsi1
+
+    tcbsa_volid="$(qm config "$BASE_DST_VM" | sed -n 's/^scsi1:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    [ "$tcbsa_volid" = "$TEST_STORAGE_A:$tcbsa_name" ]
+    assert_lv_exists "$TEST_VG_A/$tcbsa_name"
+    [ "$(lvs --noheadings -o origin "/dev/${TEST_VG_A}/${tcbsa_name}" | trim)" = "$BASE_SRC_NAME" ]
+}
+
+test_create_base_copy_add() {
+    tcbca_name="base-${BASE_COPY_DST_VM}-disk-1"
+    run_dryrun_unchanged "create-base-copy-add" create-disk-copy-and-add-to-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_COPY_DST_VM" virtio0 "$TEST_VG_B"
+    project_cmd create-disk-copy-and-add-to-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_COPY_DST_VM" virtio0 "$TEST_VG_B"
+
+    tcbca_volid="$(qm config "$BASE_COPY_DST_VM" | sed -n 's/^virtio0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
+    [ "$tcbca_volid" = "$TEST_STORAGE_B:$tcbca_name" ]
+    assert_lv_exists "$TEST_VG_B/$tcbca_name"
+    cmp -n 33554432 "$BASE_SRC_LV" "/dev/${TEST_VG_B}/${tcbca_name}"
+}
+
+test_create_base_snapshot_overwrite() {
+    tcbso_old_name="base-${BASE_OVERWRITE_VM}-disk-0"
+    tcbso_old_uuid="$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbso_old_name}" | trim)"
+    tcbso_final_volid="$TEST_STORAGE_A:$tcbso_old_name"
+    tcbso_archive_name="base-${BASE_OVERWRITE_VM}-disk-901"
+    tcbso_archive_volid="$TEST_STORAGE_B:$tcbso_archive_name"
+
+    run_dryrun_unchanged "create-base-snapshot-overwrite" create-disk-snapshot-and-overwrite-disk-on-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_OVERWRITE_VM" disk-0
+    project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_OVERWRITE_VM" disk-0
+    [ "$(qm status "$BASE_OVERWRITE_VM" | awk '{print $2}')" = "stopped" ]
+
+    [ "$(qm config "$BASE_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)" = "$tcbso_final_volid" ]
+    assert_lv_exists "$TEST_VG_A/$tcbso_old_name"
+    [ "$(lvs --noheadings -o origin "/dev/${TEST_VG_A}/${tcbso_old_name}" | trim)" = "$BASE_SRC_NAME" ]
+    [ "$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbso_archive_name}" | trim)" = "$tcbso_old_uuid" ]
+    qm config "$BASE_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcbso_archive_volid}([,[:space:]]|$)" >/dev/null
 }
 
 test_create_copy_overwrite() {
     tcow_old_volid="$TEST_STORAGE_B:$COPY_OVERWRITE_OLD_NAME"
     tcow_old_uuid="$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OLD_LV" | trim)"
-    tcow_archive_name="vm-${COPY_OVERWRITE_VM}-disk-901"
+    tcow_archive_name="vm-${COPY_OVERWRITE_VM}-disk-902"
     tcow_archive_volid="$TEST_STORAGE_B:$tcow_archive_name"
     tcow_archive_path="/dev/${TEST_VG_B}/${tcow_archive_name}"
 
+    qm start "$COPY_OVERWRITE_VM" >/dev/null
+    [ "$(qm status "$COPY_OVERWRITE_VM" | awk '{print $2}')" = "running" ]
     run_dryrun_unchanged "create-copy-overwrite" create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_OVERWRITE_VM" scsi0 pause boot
-    project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_OVERWRITE_VM" scsi0 boot
+    project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$COPY_OVERWRITE_VM" scsi0 pause boot
+    [ "$(qm status "$COPY_OVERWRITE_VM" | awk '{print $2}')" = "running" ]
 
     tcow_new_volid="$(qm config "$COPY_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tcow_new_volid" = "$tcow_old_volid" ]
@@ -139,6 +288,7 @@ test_create_copy_overwrite() {
     cmp -n 33554432 "$COPY_SRC_LV" "$tcow_new_path"
 
     [ "$(lvs --noheadings -o lv_uuid "$tcow_archive_path" | trim)" = "$tcow_old_uuid" ]
+    [ "$(lvs --noheadings -o lv_uuid "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)" = "$COPY_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
     qm config "$COPY_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tcow_archive_volid}([,[:space:]]|$)" >/dev/null
     qm config "$COPY_OVERWRITE_VM" | grep -qE '^boot:.*order=scsi0([;,]|$)'
 }
@@ -147,12 +297,15 @@ test_create_snapshot_overwrite() {
     tsow_old_uuid="$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OLD_LV" | trim)"
     tsow_final_name="$SNAP_OVERWRITE_OLD_NAME"
     tsow_final_volid="$TEST_STORAGE_A:$tsow_final_name"
-    tsow_archive_name="vm-${SNAP_OVERWRITE_VM}-disk-901"
+    tsow_archive_name="vm-${SNAP_OVERWRITE_VM}-disk-902"
     tsow_archive_volid="$TEST_STORAGE_B:$tsow_archive_name"
     tsow_archive_path="/dev/${TEST_VG_B}/${tsow_archive_name}"
 
+    qm start "$SNAP_OVERWRITE_VM" >/dev/null
+    [ "$(qm status "$SNAP_OVERWRITE_VM" | awk '{print $2}')" = "running" ]
     run_dryrun_unchanged "create-snapshot-overwrite" create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$SNAP_OVERWRITE_VM" scsi0 restart boot
-    project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$SNAP_OVERWRITE_VM" scsi0 boot
+    project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" scsi0 "$SNAP_OVERWRITE_VM" scsi0 restart boot
+    [ "$(qm status "$SNAP_OVERWRITE_VM" | awk '{print $2}')" = "running" ]
 
     tsow_new_volid="$(qm config "$SNAP_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tsow_new_volid" = "$tsow_final_volid" ]
@@ -161,6 +314,7 @@ test_create_snapshot_overwrite() {
     [ "$tsow_origin" = "$COPY_SRC_LV_NAME" ]
 
     [ "$(lvs --noheadings -o lv_uuid "$tsow_archive_path" | trim)" = "$tsow_old_uuid" ]
+    [ "$(lvs --noheadings -o lv_uuid "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_LV" | trim)" = "$SNAP_OVERWRITE_OCCUPIED_ARCHIVE_UUID" ]
     qm config "$SNAP_OVERWRITE_VM" | grep -E "^unused[0-9]+: ${tsow_archive_volid}([,[:space:]]|$)" >/dev/null
     qm config "$SNAP_OVERWRITE_VM" | grep -qE '^boot:.*order=scsi0([;,]|$)'
 }
@@ -171,8 +325,10 @@ test_create_copy_overwrite_delete() {
     tcod_archive_name="vm-${COPY_OVERWRITE_DELETE_VM}-disk-901"
     tcod_archive_path="/dev/${TEST_VG_B}/${tcod_archive_name}"
 
+    qm start "$COPY_OVERWRITE_DELETE_VM" >/dev/null
     run_dryrun_unchanged "create-copy-overwrite-delete" create-disk-copy-and-overwrite-disk-on-vm.sh delete "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_DELETE_VM" disk-0 stop
-    project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_DELETE_VM" disk-0 delete
+    project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$COPY_SRC_VM" disk-0 "$COPY_OVERWRITE_DELETE_VM" disk-0 delete stop
+    [ "$(qm status "$COPY_OVERWRITE_DELETE_VM" | awk '{print $2}')" = "stopped" ]
 
     tcod_new_volid="$(qm config "$COPY_OVERWRITE_DELETE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tcod_new_volid" = "$tcod_final_volid" ]
@@ -189,8 +345,10 @@ test_create_snapshot_overwrite_delete() {
     tsod_archive_name="vm-${SNAP_OVERWRITE_DELETE_VM}-disk-901"
     tsod_archive_path="/dev/${TEST_VG_B}/${tsod_archive_name}"
 
+    qm start "$SNAP_OVERWRITE_DELETE_VM" >/dev/null
     run_dryrun_unchanged "create-snapshot-overwrite-delete" create-disk-snapshot-and-overwrite-disk-on-vm.sh delete "$COPY_SRC_LV" "$SNAP_OVERWRITE_DELETE_OLD_LV" pause
-    project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_LV" "$SNAP_OVERWRITE_DELETE_OLD_LV" delete
+    project_cmd create-disk-snapshot-and-overwrite-disk-on-vm.sh "$COPY_SRC_LV" "$SNAP_OVERWRITE_DELETE_OLD_LV" delete pause
+    [ "$(qm status "$SNAP_OVERWRITE_DELETE_VM" | awk '{print $2}')" = "running" ]
 
     tsod_new_volid="$(qm config "$SNAP_OVERWRITE_DELETE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tsod_new_volid" = "$tsod_final_volid" ]
@@ -234,27 +392,55 @@ test_create_snapshot_overwrite_empty() {
 }
 
 test_copy_between_vms() {
-    tcbv_before="$(qm config "$COPY_DST_VM" | grep -c '^scsi' || :)"
+    tcbv_before="$TEST_DATA_DIR/copy-between-before.txt"
+    tcbv_after="$TEST_DATA_DIR/copy-between-after.txt"
+    qm config "$COPY_DST_VM" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide)[0-9]+$/ {split($2,a,","); print a[1]}' | sort -u > "$tcbv_before"
+
     run_dryrun_unchanged "copy-between-vms" copy-disk-between-vms.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" "$TEST_VG_B"
     project_cmd copy-disk-between-vms.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM" "$TEST_VG_B"
-    tcbv_after="$(qm config "$COPY_DST_VM" | grep -c '^scsi' || :)"
-    [ "$tcbv_after" -gt "$tcbv_before" ]
+
+    qm config "$COPY_DST_VM" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide)[0-9]+$/ {split($2,a,","); print a[1]}' | sort -u > "$tcbv_after"
+    tcbv_new="$(grep -Fvx -f "$tcbv_before" "$tcbv_after" || :)"
+    [ "$(printf '%s
+' "$tcbv_new" | awk 'NF {n++} END {print n+0}')" -eq 1 ]
+    case "$tcbv_new" in "$TEST_STORAGE_B":*) ;; *) return 1 ;; esac
+    tcbv_path="$(pvesm path "$tcbv_new")"
+    [ -z "$(lvs --noheadings -o origin "$tcbv_path" | trim)" ]
+    cmp -n 33554432 "$COPY_SRC_LV" "$tcbv_path"
 }
 
 test_snapshot_between_vms() {
-    tsbv_before="$(qm config "$COPY_DST_VM" | grep -c '^scsi' || :)"
+    tsbv_before="$TEST_DATA_DIR/snapshot-between-before.txt"
+    tsbv_after="$TEST_DATA_DIR/snapshot-between-after.txt"
+    qm config "$COPY_DST_VM" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide)[0-9]+$/ {split($2,a,","); print a[1]}' | sort -u > "$tsbv_before"
+
     run_dryrun_unchanged "snapshot-between-vms" snapshot-disk-between-vms.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM"
     project_cmd snapshot-disk-between-vms.sh "$COPY_SRC_VM" scsi0 "$COPY_DST_VM"
-    tsbv_after="$(qm config "$COPY_DST_VM" | grep -c '^scsi' || :)"
-    [ "$tsbv_after" -gt "$tsbv_before" ]
+
+    qm config "$COPY_DST_VM" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide)[0-9]+$/ {split($2,a,","); print a[1]}' | sort -u > "$tsbv_after"
+    tsbv_new="$(grep -Fvx -f "$tsbv_before" "$tsbv_after" || :)"
+    [ "$(printf '%s
+' "$tsbv_new" | awk 'NF {n++} END {print n+0}')" -eq 1 ]
+    tsbv_path="$(pvesm path "$tsbv_new")"
+    [ "$(lvs --noheadings -o origin "$tsbv_path" | trim)" = "$COPY_SRC_LV_NAME" ]
 }
 
 test_clone_single_disk() {
-    tcsd_before="$(qm config "$COPY_SRC_VM" | grep -c '^scsi' || :)"
+    tcsd_before="$TEST_DATA_DIR/clone-single-before.txt"
+    tcsd_after="$TEST_DATA_DIR/clone-single-after.txt"
+    qm config "$COPY_SRC_VM" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide)[0-9]+$/ {split($2,a,","); print a[1]}' | sort -u > "$tcsd_before"
+
     run_dryrun_unchanged "clone-single-disk" clone-single-vm-disk.sh "$COPY_SRC_VM" scsi0 "$TEST_VG_B"
     project_cmd clone-single-vm-disk.sh "$COPY_SRC_VM" scsi0 "$TEST_VG_B"
-    tcsd_after="$(qm config "$COPY_SRC_VM" | grep -c '^scsi' || :)"
-    [ "$tcsd_after" -gt "$tcsd_before" ]
+
+    qm config "$COPY_SRC_VM" | awk -F': ' '$1 ~ /^(scsi|sata|virtio|ide)[0-9]+$/ {split($2,a,","); print a[1]}' | sort -u > "$tcsd_after"
+    tcsd_new="$(grep -Fvx -f "$tcsd_before" "$tcsd_after" || :)"
+    [ "$(printf '%s
+' "$tcsd_new" | awk 'NF {n++} END {print n+0}')" -eq 1 ]
+    case "$tcsd_new" in "$TEST_STORAGE_B":*) ;; *) return 1 ;; esac
+    tcsd_path="$(pvesm path "$tcsd_new")"
+    [ -z "$(lvs --noheadings -o origin "$tcsd_path" | trim)" ]
+    cmp -n 33554432 "$COPY_SRC_LV" "$tcsd_path"
 }
 
 ############################################################

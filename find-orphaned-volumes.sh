@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.3.1"
     VG=""
     parse_arguments "$@"
 }
@@ -455,18 +455,20 @@ build_reference_index() {
 }
 
 # list_orphans
-# Lists vm-N-disk-M LVs whose canonical path is absent from the reference index.
+# Lists vm-N-disk-M and base-N-disk-M LVs whose canonical path is absent from the reference index.
 list_orphans() {
     printf '%-36s %-12s %s\n' LV_PATH SIZE STATUS
     if [ -n "$VG" ]; then lvs --noheadings --separator '|' -o lv_path,lv_name,lv_size "$VG"
     else lvs --noheadings --separator '|' -o lv_path,lv_name,lv_size; fi |
     while IFS='|' read -r lo_path lo_name lo_size; do
         lo_path="$(printf '%s' "$lo_path" | trim)"; lo_name="$(printf '%s' "$lo_name" | trim)"; lo_size="$(printf '%s' "$lo_size" | trim)"
-        printf '%s\n' "$lo_name" | grep -qE '^vm-[0-9]+-disk-[0-9]+$' || continue
+        printf '%s\n' "$lo_name" | grep -qE '^(vm|base)-[0-9]+-disk-[0-9]+$' || continue
         lo_real="$(readlink -f "$lo_path" 2>/dev/null || :)"; [ -n "$lo_real" ] || continue
         grep -Fx "$lo_real" "$REFERENCE_FILE" >/dev/null 2>&1 || printf '%-36s %-12s %s\n' "$lo_path" "$lo_size" ORPHAN
     done
 }
+
+# Recognizes both vm-VMID-disk-N and base-VMID-disk-N managed volumes.
 
 ############################################################
 # START

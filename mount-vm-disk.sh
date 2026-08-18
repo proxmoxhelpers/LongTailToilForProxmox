@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.0.0"
     MOUNT_ROOT=""; MODE=""
     parse_arguments "$@"
     check_elevation
@@ -830,7 +830,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.0.0"
     MOUNT_ROOT=""; MODE="--ro"; KPARTX_STATUS=0
     parse_arguments "$@"
     check_elevation

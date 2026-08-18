@@ -1,13 +1,60 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.4.0**  
-Project target: **3.3.0**
+Test suite version: **2.8.0**  
+Project target: **3.4.2**
 
-This suite exercises all 40 project commands on a real Proxmox node while avoiding production storage and guests.
+This suite exercises all 42 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.8.0 — v3.4.2 full behavior and harness-safety audit
+
+The 42-command matrix was re-audited against the actual option and transaction branches rather than treating one test per command as sufficient. High-risk groups now cover thin versus regular LV copies, wrong destructive confirmation, shared-reference refusals, direct and partitioned mounts, VM-state modes, overwrite archive-number collisions and delete paths, exact/bare/default device selectors, boot-order preservation, vm/base namespaces, strict selector ambiguity, byte-preserving storage moves/import/export, QEMU/template/LXC VMID changes, and QEMU/LXC network edits.
+
+The harness itself was hardened at the same time:
+
+- every mutating public helper must have a `run_dryrun_unchanged` integration reference;
+- dry-run/refusal snapshots include test LV metadata, sampled LV content hashes, QEMU/LXC configs and runtime state, test storage definitions, test files and mounts;
+- protected-host baselines include pre-existing VG/PV/LV metadata, guest-config checksums, local QEMU/LXC runtime status, canonical storage configuration and firewall-file checksums;
+- cleanup verifies exact test guest identity **and** every storage-backed reference before any guest purge;
+- cleanup fails closed by layer: remaining mounts block guest/storage cleanup, remaining guests block storage/VG cleanup, remaining storage definitions block VG/loop cleanup, and ownership records are retained if cleanup cannot prove safety;
+- project backup paths that already existed before the test run are recorded and never removed by cleanup;
+- disposable LXC config fixtures exercise CT paths without selecting an existing container;
+- a third loopback-owned regular VG exercises the non-sparse regular-LV copy path.
+
+Static CI now also fails if a public helper is missing from the integration groups, if a mutating helper lacks a dry-run immutability case, or if README/test-matrix command inventory drifts from the 42 public scripts.
+
+## v2.7.0 — v3.4.1 alternate-branch merge regression coverage
+
+The alternate-branch review added regression coverage for improvements that were stronger than the current implementation without importing the older branch wholesale.
+
+The numbering fixture now requires active-sequence start, gap and duplicate analysis while excluding `unusedN` archives. The filesystem fixture uses `partx` partition offsets and includes both a compatible Linux-filesystem/ext4 partition and an intentionally mismatched Microsoft-basic-data/ext4 partition.
+
+Disk configuration coverage now verifies namespace-preserving renumbering across both a current `vm-VMID-*` namespace and a stale `base-OTHERID-*` namespace, plus exact stale `vm-` and `base-` name repair. Static tests additionally require shared-volume refusal, EFI/TPM name-repair coverage, richer partition-type compatibility, and strict ambiguity rejection for managed `disk-N` selectors.
+
+## v2.6.0 — v3.4.0 numbering/filesystem inspection coverage
+
+Adds two read-only standalone helpers:
+
+```text
+verify-vm-disk-numbering.sh
+list-all-vm-lvm-filesystems.sh
+```
+
+The inspection fixture now includes an intentionally stale managed volume name (`vm-OTHERID-disk-5`) to verify embedded-VMID and non-zero-start warnings, plus a disposable GPT-partitioned LV containing a real ext4 filesystem image. The filesystem inventory must report the partition-table hint and directly probed content format separately.
+
+## v2.5.0 — v3.3.1 vm/base managed-volume family coverage
+
+Adds regression and real-fixture coverage for both Proxmox managed LVM naming families:
+
+```text
+vm-VMID-disk-N
+base-VMID-disk-N
+```
+
+The suite now checks VMID changes, renumbering, volume-name repair, orphan discovery, recovery, disk-number selectors, and create/copy/snapshot behavior against template/base-image naming.
 
 ## v2.4.0 — v3.3.0 create device-selector/boot coverage
 
@@ -141,26 +188,15 @@ The reusable design lessons behind this suite are documented in [`../docs/testin
 
 ## Safety model
 
-The integration groups do **not** select an existing disk, VG, thin pool, VM, CT, or storage for mutation.
+The integration groups do **not** select an existing disk, VG, thin pool, VM, CT, storage definition or Linux bridge for mutation. Every mutating group creates uniquely named fixtures backed by sparse loop files and records exact ownership before real operations begin.
 
-For each mutating group the harness:
+Before mutation, the harness captures protected pre-existing VG/PV/LV metadata, canonical Proxmox storage semantics, guest-config checksums, local QEMU/LXC runtime status and firewall-file checksums. Test-owned dry-run/refusal snapshots are stronger still: they include LV metadata and sampled content hashes, QEMU/LXC configs and status, temporary storage definitions, files/non-files under the test data directory, and mounts below the sandbox. A mutating helper's dry run must leave that complete snapshot byte-for-byte unchanged.
 
-1. captures pre-existing VG/PV/LV identities, guest-config checksums, and a canonical semantic representation of `storage.cfg`;
-2. creates two sparse loopback image files under `/var/tmp`;
-3. associates only those files with new loop devices;
-4. creates uniquely named test PVs, VGs and thin pools on those loop devices;
-5. registers uniquely named Proxmox LVM-thin storage IDs;
-6. dynamically chooses unused high VMIDs and creates stopped, test-named VMs only as needed;
-7. runs every mutating project command with `dryrun` first;
-8. snapshots all test-owned state before and after the dry run and requires exact equality;
-9. runs the real operation only against disposable fixtures;
-10. verifies the expected result;
-11. re-validates ownership before every cleanup action;
-12. compares protected state after cleanup and writes anomaly diffs if anything changed unexpectedly.
+Real tests operate only on dynamically allocated high VMIDs/CTIDs and uniquely named storage. Most guests remain stopped; state-mode tests briefly start or suspend **only disposable QEMU guests** in order to verify `hot`, `pause`, `stop` and `restart` behavior. Config-only LXC fixtures remain disposable and stopped. The network group uses an already-existing Linux bridge but never creates, modifies or removes the bridge itself.
 
-Cleanup refuses to remove a VM whose name no longer matches the exact expected test name, a storage whose `vgname` no longer matches the recorded test VG, or a VG whose PV is no longer the recorded loop device.
+Cleanup is deliberately fail-closed. Before a test VM/CT can be purged, its exact expected test name/hostname must still match and every storage-backed reference must still map to a storage/VG owned by that run. Cleanup proceeds in layers: unresolved test mounts stop deeper cleanup; surviving owned guests stop storage/VG cleanup; surviving storage definitions stop VG/loop cleanup; and any unresolved VG/loop leaves the ownership directory in place for manual recovery. A cleanup failure never authorizes broader deletion. Pre-existing project backup paths under `/root` are recorded before the run and are never removed as test artifacts.
 
-A test failure therefore does **not** authorize broader cleanup.
+A third loopback-owned regular VG is created only for the regular-LV copy test so the suite can prove that regular destinations receive full writes rather than sparse writes. Data-sensitive copy/move/import/export cases verify content independently with `cmp` or hashes.
 
 ## Default behavior
 
@@ -209,29 +245,33 @@ A single group may retain its sandbox for manual inspection:
 
 | Launcher | Area |
 |---|---|
-| `00-static-cli.sh` | syntax, version, dryrun keyword parsing, documentation |
-| `10-inspection.sh` | disk listing, ownership, orphan discovery, storage audit |
-| `20-lvm.sh` | raw LV copy, move, rename, delete |
-| `30-mount.sh` | direct LV mount/unmount, VM-slot mount, root detection |
-| `40-disk-lifecycle.sh` | attach, detach, delete, unused cleanup |
-| `50-copy-snapshot.sh` | VM disk copy/snapshot/clone helpers |
-| `60-disk-config.sh` | bus, swap, boot, replacement, renumber, naming repair |
-| `70-storage-io.sh` | storage moves, import/export, storage-prefix rewrite |
-| `80-vm-config.sh` | VMID change, config-only clone, recovery |
-| `90-network.sh` | bulk VM network config |
+| `00-static-cli.sh` | POSIX/standalone CLI, project safety contracts, harness self-tests, command/documentation coverage |
+| `10-inspection.sh` | disk/LV listing, ownership/orphans/audit, numbering defects, partition-table/content verification |
+| `20-lvm.sh` | thin + regular LV copy, same/cross-VG move, rename forms, confirmation-safe delete |
+| `30-mount.sh` | direct and partitioned mounts, RO/RW behavior, VM-slot mount, root detection, unmount |
+| `40-disk-lifecycle.sh` | attach/detach/delete/unused cleanup, shared-reference refusals, VM-to-VM moves and state modes |
+| `50-copy-snapshot.sh` | add/overwrite copy/snapshot, selectors, boot, state modes, archive/delete/empty-target/template paths, wrappers |
+| `60-disk-config.sh` | bus/default/first-free changes, swap, boot, replacement, renumber namespaces, naming repair and refusals |
+| `70-storage-io.sh` | storage moves, bulk moves, import/export byte verification, storage-prefix rewrite |
+| `80-vm-config.sh` | QEMU/template/LXC VMID changes, collision/snapshot/shared refusals, config-only clone, recovery |
+| `90-network.sh` | QEMU + LXC bulk NIC changes, option preservation, tag removal, missing-guest refusal |
+
+The command-by-command mapping and representative variant coverage are in [`TEST-MATRIX.md`](TEST-MATRIX.md).
 
 ## Requirements
 
-Integration mode is intended for a Proxmox VE node and expects the normal Proxmox/LVM utilities plus tools required by the commands under test. Examples include:
+Integration mode is intended for a Proxmox VE node and expects normal Proxmox/LVM utilities plus the tools used by the selected groups. The expanded v3.4.2 suite uses, among others:
 
 ```text
-qm pvesm lvs vgs pvs lvcreate lvremove vgcreate vgremove pvcreate
-losetup truncate findmnt mountpoint kpartx blkid qemu-img mkfs.ext4
+qm pct pvesm
+lvs vgs pvs lvcreate lvremove vgcreate vgremove pvcreate
+losetup truncate dd cmp sha256sum
+findmnt mount mountpoint umount kpartx dmsetup
+sfdisk partx blkid mkfs.ext4
+qemu-img
 ```
 
-A missing prerequisite causes the relevant group/test to fail or explicitly skip where appropriate.
-
-The network group does not create or modify a Linux bridge. It uses an already-existing bridge and skips its single integration case if no bridge exists.
+A missing prerequisite causes the relevant group/test to fail or explicitly skip only where the test is intentionally conditional. The network group does not create or modify a Linux bridge; it uses an already-existing bridge and skips when no suitable bridge exists.
 
 ## Results
 
@@ -251,12 +291,16 @@ anomaly-pvs.diff
 anomaly-lvs.diff
 anomaly-storage.diff
 anomaly-guests.diff
+anomaly-guest-status.diff
+anomaly-firewall.diff
 ```
 
 An anomaly is reported separately from a test assertion because a Proxmox cluster can legitimately change concurrently. For safety, any protected-state anomaly still makes that group return nonzero and must be inspected before trusting the run.
 
 ## Important
 
-These are integration tests for storage-management software. The fixture design is deliberately isolated, but run them first on a non-production Proxmox node whenever possible.
+These are real integration tests for storage-management software. The fixtures and cleanup rules are deliberately isolated, but run the full suite first on a non-production Proxmox node whenever possible.
 
-Never manually rename a test VG/storage/VM during a running test. Ownership changes intentionally cause cleanup to refuse the affected object.
+Do not manually rename, attach production storage to, or repurpose a test VG/storage/VM/CT during a running group. Ownership changes intentionally cause cleanup to refuse the affected layer and retain evidence rather than guessing.
+
+The last fully documented real-Proxmox integration-validated POSIX baseline is project **v3.0.1** for its then-current 36-command matrix. The expanded **v3.4.2 / suite v2.8.0** definition has stronger coverage for all 42 current helpers, but it must complete a fresh real-host run with zero failures and zero protected-state anomalies before being described as integration-validated.

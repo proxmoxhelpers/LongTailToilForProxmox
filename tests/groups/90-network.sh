@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"
-    TEST_SUITE_VERSION="2.4.0"
+    PROJECT_VERSION="3.4.2"
+    TEST_SUITE_VERSION="2.8.0"
     TEST_GROUP="network"
     test_reset_counters
     test_parse_arguments "$@"
@@ -29,7 +29,9 @@ main() {
     NETWORK_BRIDGE="$(find_test_bridge || :)"
     if [ -z "$NETWORK_BRIDGE" ]; then skip_case "bulk-change-vm-network.sh — no existing Linux bridge was detected"; return 0; fi
     prepare_network_fixture
-    run_case "bulk-change-vm-network.sh" test_bulk_network
+    run_case "bulk-change-vm-network.sh QEMU+LXC options/model preservation" test_bulk_network
+    run_case "bulk-change-vm-network.sh tag removal/firewall update" test_bulk_network_remove_tag
+    run_case "bulk-change-vm-network.sh missing-guest refusal before mutation" test_bulk_network_refusal
 }
 
 end() {
@@ -44,9 +46,9 @@ end() {
 
 print_plan() {
     print_banner "Bulk VM network tests"
-    printf '%s\n' "Creates two stopped, diskless test VMs and uses an already-existing Linux bridge."
-    printf '%s\n' "No bridge is created or modified. If no bridge exists, the test is explicitly skipped."
-    printf '%s\n' "The test changes only the net0 definitions of the two disposable VMs."
+    printf '%s\n' "Creates two stopped diskless QEMU VMs plus one config-only stopped CT and uses an already-existing Linux bridge."
+    printf '%s\n' "No bridge is created or modified. The real cases exercise bridge, VLAN tag, firewall and QEMU model changes while preserving MAC/other NIC options."
+    printf '%s\n' "A missing-guest negative case is placed first in the target list so refusal is proven before any mutation."
 }
 
 ############################################################
@@ -60,8 +62,11 @@ find_test_bridge() {
 prepare_network_fixture() {
     NET_VM1="$(create_test_vm net-a)"
     NET_VM2="$(create_test_vm net-b)"
-    qm set "$NET_VM1" --net0 "virtio=02:00:00:00:00:11,bridge=$NETWORK_BRIDGE" >/dev/null
-    qm set "$NET_VM2" --net0 "virtio=02:00:00:00:00:12,bridge=$NETWORK_BRIDGE" >/dev/null
+    NET_CT="$(create_test_ct net-ct)"
+    qm set "$NET_VM1" --net0 "virtio=02:00:00:00:00:11,bridge=$NETWORK_BRIDGE,queues=2" >/dev/null
+    qm set "$NET_VM2" --net0 "virtio=02:00:00:00:00:12,bridge=$NETWORK_BRIDGE,queues=4" >/dev/null
+    printf 'net0: name=eth0,bridge=%s,hwaddr=02:00:00:00:00:13,type=veth\n' "$NETWORK_BRIDGE" >> "/etc/pve/lxc/${NET_CT}.conf"
+    NET_MISSING="$(allocate_free_vmid)"
 }
 
 ############################################################
@@ -69,10 +74,42 @@ prepare_network_fixture() {
 ############################################################
 
 test_bulk_network() {
-    run_dryrun_unchanged "bulk-network" bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" --firewall 1 "$NET_VM1" "$NET_VM2"
-    project_cmd bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" --firewall 1 "$NET_VM1" "$NET_VM2"
-    qm config "$NET_VM1" | grep -E '^net0:.*firewall=1' >/dev/null
-    qm config "$NET_VM2" | grep -E '^net0:.*firewall=1' >/dev/null
+    run_dryrun_unchanged "bulk-network-options" bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" --tag 123 --firewall 1 --model e1000 "$NET_VM1" "$NET_VM2" "$NET_CT"
+    project_cmd bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" --tag 123 --firewall 1 --model e1000 "$NET_VM1" "$NET_VM2" "$NET_CT"
+
+    tbn_v1="$(qm config "$NET_VM1" | sed -n 's/^net0:[[:space:]]*//p')"
+    tbn_v2="$(qm config "$NET_VM2" | sed -n 's/^net0:[[:space:]]*//p')"
+    tbn_ct="$(pct config "$NET_CT" | sed -n 's/^net0:[[:space:]]*//p')"
+    printf '%s\n' "$tbn_v1" | grep -F 'e1000=02:00:00:00:00:11' >/dev/null
+    printf '%s\n' "$tbn_v1" | grep -F 'queues=2' >/dev/null
+    printf '%s\n' "$tbn_v2" | grep -F 'e1000=02:00:00:00:00:12' >/dev/null
+    printf '%s\n' "$tbn_v2" | grep -F 'queues=4' >/dev/null
+    for tbn_value in "$tbn_v1" "$tbn_v2" "$tbn_ct"; do
+        printf '%s\n' "$tbn_value" | grep -F "bridge=$NETWORK_BRIDGE" >/dev/null
+        printf '%s\n' "$tbn_value" | grep -F 'tag=123' >/dev/null
+        printf '%s\n' "$tbn_value" | grep -F 'firewall=1' >/dev/null
+    done
+    printf '%s\n' "$tbn_ct" | grep -F 'name=eth0' >/dev/null
+    printf '%s\n' "$tbn_ct" | grep -F 'hwaddr=02:00:00:00:00:13' >/dev/null
+    ! printf '%s\n' "$tbn_ct" | grep -E '(^|,)e1000=' >/dev/null
+}
+
+test_bulk_network_remove_tag() {
+    run_dryrun_unchanged "bulk-network-remove-tag" bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" --tag none --firewall 0 "$NET_VM1" "$NET_VM2" "$NET_CT"
+    project_cmd bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" --tag none --firewall 0 "$NET_VM1" "$NET_VM2" "$NET_CT"
+    for tbnr_id in "$NET_VM1" "$NET_VM2"; do
+        tbnr_value="$(qm config "$tbnr_id" | sed -n 's/^net0:[[:space:]]*//p')"
+        ! printf '%s\n' "$tbnr_value" | grep -E '(^|,)tag=' >/dev/null
+        printf '%s\n' "$tbnr_value" | grep -F 'firewall=0' >/dev/null
+        printf '%s\n' "$tbnr_value" | grep -E '^e1000=02:00:00:00:00:(11|12)' >/dev/null
+    done
+    tbnr_ct="$(pct config "$NET_CT" | sed -n 's/^net0:[[:space:]]*//p')"
+    ! printf '%s\n' "$tbnr_ct" | grep -E '(^|,)tag=' >/dev/null
+    printf '%s\n' "$tbnr_ct" | grep -F 'firewall=0' >/dev/null
+}
+
+test_bulk_network_refusal() {
+    run_expect_fail_unchanged "bulk-network-missing-first" bulk-change-vm-network.sh net0 "$NETWORK_BRIDGE" "$NET_MISSING" "$NET_VM1"
 }
 
 ############################################################

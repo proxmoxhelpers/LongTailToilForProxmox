@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.0.0"
+    PROJECT_VERSION="3.4.2"; SCRIPT_VERSION="3.4.1"
     PLAN_FILE=""; RENAMED_FILE=""; COMPLETED=0
     CONFIG_CONTENT_CHANGED=0; CONFIG_MOVED=0; FIREWALL_MOVED=0
     parse_arguments "$@"
@@ -451,7 +451,7 @@ USAGE
 
 DESCRIPTION
   Changes the VMID of a local QEMU VM or LXC container when all referenced
-  vm-OLDID-* storage volumes are LVM/LVM-thin and can be renamed in place.
+  vm-OLDID-* / base-OLDID-* storage volumes are LVM/LVM-thin and can be renamed in place.
 
   Preflight checks destination VMID availability, locks, snapshots, volume
   ownership and name collisions before mutation. The guest is left stopped.
@@ -560,8 +560,9 @@ preflight_guest_state() {
 # build_volume_plan
 #
 # Description:
-#   Resolves every vm-OLDID-* reference to LVM metadata, validates destination
-#   collisions and shared references, and records the complete rename plan
+#   Resolves every vm-OLDID-* and base-OLDID-* reference to LVM metadata,
+#   validates destination collisions/shared references, preserves the volume
+#   family, and records the complete rename plan
 #   before any mutation.
 #
 # Usage:
@@ -582,17 +583,28 @@ build_volume_plan() {
     register_temp_file "$PLAN_FILE"
     bvp_volids="$(mktemp)" || die "Unable to create volume-reference list."
     register_temp_file "$bvp_volids"
-    grep -oE "[A-Za-z0-9_.-]+:vm-${OLD_ID}-[A-Za-z0-9_.+-]+" "$CONFIG" | sort -u > "$bvp_volids" || :
+    grep -oE "[A-Za-z0-9_.-]+:(vm|base)-${OLD_ID}-[A-Za-z0-9_.+-]+" "$CONFIG" | sort -u > "$bvp_volids" || :
+    bvp_foreign="$(grep -oE "[A-Za-z0-9_.-]+:(vm|base)-[0-9]+-[A-Za-z0-9_.+-]+" "$CONFIG" | grep -vE ":(vm|base)-${OLD_ID}-" | sort -u || :)"
 
     printf '\nReferenced volumes:\n\n'
-    if [ -s "$bvp_volids" ]; then sed 's/^/  /' "$bvp_volids"; else printf '  No vm-%s-* storage volumes found.\n' "$OLD_ID"; fi
+    if [ -s "$bvp_volids" ]; then sed 's/^/  /' "$bvp_volids"; else printf '  No vm-%s-* or base-%s-* storage volumes found.\n' "$OLD_ID" "$OLD_ID"; fi
     printf '\n'
+    if [ -n "$bvp_foreign" ]; then
+        warn "Configured vm/base volume names with a different embedded VMID will be left unchanged:"
+        printf '%s\n' "$bvp_foreign" | sed 's/^/       /'
+        warn "Use fix-vm-volume-names.sh separately if you want those backing names normalized to the guest VMID."
+        printf '\n'
+    fi
 
     while IFS= read -r bvp_old_volid; do
         [ -n "$bvp_old_volid" ] || continue
         bvp_storage="${bvp_old_volid%%:*}"; bvp_old_volume="${bvp_old_volid#*:}"
-        bvp_suffix="${bvp_old_volume#vm-${OLD_ID}-}"
-        bvp_new_volume="vm-${NEW_ID}-${bvp_suffix}"; bvp_new_volid="${bvp_storage}:${bvp_new_volume}"
+        case "$bvp_old_volume" in
+            vm-"${OLD_ID}"-*) bvp_family="vm"; bvp_suffix="${bvp_old_volume#vm-${OLD_ID}-}" ;;
+            base-"${OLD_ID}"-*) bvp_family="base"; bvp_suffix="${bvp_old_volume#base-${OLD_ID}-}" ;;
+            *) rm -f "$bvp_volids"; die "Unexpected managed-volume name: $bvp_old_volume" ;;
+        esac
+        bvp_new_volume="${bvp_family}-${NEW_ID}-${bvp_suffix}"; bvp_new_volid="${bvp_storage}:${bvp_new_volume}"
         bvp_old_path="$(pvesm path "$bvp_old_volid" 2>/dev/null || :)"; [ -n "$bvp_old_path" ] || { rm -f "$bvp_volids"; die "Could not resolve Proxmox volume: $bvp_old_volid"; }
 
         bvp_lvm="$(lvs --noheadings --separator '|' -o vg_name,lv_name "$bvp_old_path" 2>/dev/null | head -n1 || :)"
@@ -755,17 +767,17 @@ rename_volumes() {
 }
 
 # rewrite_guest_config
-# Rewrites vm-OLDID- references in the source guest configuration.
+# Rewrites vm-OLDID- and base-OLDID- references in the source guest configuration.
 rewrite_guest_config() {
     print_banner "Updating guest configuration"
     if dryrun_enabled; then
         dryrun_print_shell "mktemp  # temporary rewritten guest config"
-        dryrun_print_shell "sed s/vm-${OLD_ID}-/vm-${NEW_ID}-/g $(shell_quote "$CONFIG") > <temporary-config>"
+        dryrun_print_shell "sed -e s/vm-${OLD_ID}-/vm-${NEW_ID}-/g -e s/base-${OLD_ID}-/base-${NEW_ID}-/g $(shell_quote "$CONFIG") > <temporary-config>"
         dryrun_print_shell "cat <temporary-config> > $(shell_quote "$CONFIG")"
         dryrun_print_shell "rm -f <temporary-config>"
     else
         rgc_tmp="$(mktemp)" || die "Unable to create temporary guest config."
-        sed "s/vm-${OLD_ID}-/vm-${NEW_ID}-/g" "$CONFIG" > "$rgc_tmp"
+        sed -e "s/vm-${OLD_ID}-/vm-${NEW_ID}-/g" -e "s/base-${OLD_ID}-/base-${NEW_ID}-/g" "$CONFIG" > "$rgc_tmp"
         cat "$rgc_tmp" > "$CONFIG"
         rm -f "$rgc_tmp"
     fi
@@ -825,7 +837,7 @@ verify_result() {
         dryrun_verify "New configuration $NEW_CONFIG would exist"
         dryrun_verify "Proxmox would read VMID $NEW_ID"
         dryrun_verify "VMID $NEW_ID would remain stopped"
-        dryrun_verify "No vm-${OLD_ID}- volume references would remain in the new configuration"
+        dryrun_verify "No vm-${OLD_ID}- or base-${OLD_ID}- volume references would remain in the new configuration"
         while IFS='|' read -r vr_old_volid vr_old_path vr_vg vr_old vr_new vr_new_volid; do
             [ -n "$vr_old_volid" ] || continue
             dryrun_verify "LV ${vr_vg}/${vr_new} would exist and ${vr_vg}/${vr_old} would be absent"
@@ -842,12 +854,12 @@ verify_result() {
     NEW_STATUS="$("$GUEST_CMD" status "$NEW_ID" 2>/dev/null | awk '{print $2}' || :)"
     if [ "$NEW_STATUS" = "stopped" ]; then ok "New VMID is stopped."; else warn "Unexpected new VMID status: ${NEW_STATUS:-unknown}"; vr_failed=1; fi
 
-    if grep -q "vm-${OLD_ID}-" "$NEW_CONFIG"; then
-        warn "Old vm-${OLD_ID}- volume references remain:"
-        grep "vm-${OLD_ID}-" "$NEW_CONFIG" | sed 's/^/       /' >&2
+    if grep -qE "(vm|base)-${OLD_ID}-" "$NEW_CONFIG"; then
+        warn "Old vm-${OLD_ID}- or base-${OLD_ID}- volume references remain:"
+        grep -E "(vm|base)-${OLD_ID}-" "$NEW_CONFIG" | sed 's/^/       /' >&2
         vr_failed=1
     else
-        ok "No old volume names remain in configuration."
+        ok "No old managed-volume names remain in configuration."
     fi
 
     while IFS='|' read -r vr_old_volid vr_old_path vr_vg vr_old vr_new vr_new_volid; do
