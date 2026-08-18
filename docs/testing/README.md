@@ -85,7 +85,7 @@ The current integration harness adds several fail-closed protections beyond the 
 - pre-existing backup paths are recorded and never removed by test cleanup;
 - a loopback-owned regular VG exercises full-write copy behavior separately from LVM-thin sparse-copy behavior.
 
-The 42-command v3.4.2 suite contains 84 real integration cases. That is a test definition, not a validation claim: it still requires a fresh real-Proxmox run with zero failures and zero protected-state anomalies before the release is called integration-validated.
+The 42-command v3.4.4 suite contains 86 real integration cases. That is a test definition, not a validation claim: it still requires a fresh real-Proxmox run with zero failures and zero protected-state anomalies before the release is called integration-validated.
 
 ## Lessons that motivated these guides
 
