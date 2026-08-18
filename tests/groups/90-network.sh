@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"
-    TEST_SUITE_VERSION="2.8.2"
+    PROJECT_VERSION="3.4.7"
+    TEST_SUITE_VERSION="2.8.5"
     TEST_GROUP="network"
     test_reset_counters
     test_parse_arguments "$@"
@@ -56,21 +56,37 @@ print_plan() {
 ############################################################
 
 find_test_bridge() {
-    ip -o link show type bridge 2>/dev/null | awk -F': ' '{split($2,a,"@"); print a[1]; exit}'
+    ip -o link show type bridge 2>/dev/null | awk -F': ' '
+        {
+            split($2,a,"@")
+            name=a[1]
+            if (first=="") first=name
+            if (name ~ /^vmbr[0-9]*$/) { print name; found=1; exit }
+        }
+        END { if (!found && first!="") print first }
+    '
 }
 
 prepare_network_fixture() {
-    NET_VM1="$(create_test_vm net-a)"
-    NET_VM2="$(create_test_vm net-b)"
-    NET_CT="$(create_test_ct net-ct)"
+    NET_VM1="$(create_test_vm net-a)" || die "Could not create first disposable network-test VM."
+    NET_VM2="$(create_test_vm net-b)" || die "Could not create second disposable network-test VM."
+    NET_CT="$(create_test_ct net-ct)" || die "Could not create disposable network-test CT config."
+
     NET_CT_ROOT_NAME="vm-${NET_CT}-disk-0"
-    create_thin_lv "$TEST_VG_A" "$NET_CT_ROOT_NAME" 16M >/dev/null
+    create_thin_lv "$TEST_VG_A" "$NET_CT_ROOT_NAME" 16M >/dev/null || die "Could not create disposable CT rootfs LV."
     attach_test_ct_lv "$NET_CT" "$TEST_STORAGE_A" "$NET_CT_ROOT_NAME" rootfs 16M
     pct config "$NET_CT" >/dev/null 2>&1 || die "Disposable CT rootfs fixture is not valid."
-    qm set "$NET_VM1" --net0 "virtio=02:00:00:00:00:11,bridge=$NETWORK_BRIDGE,queues=2" >/dev/null
-    qm set "$NET_VM2" --net0 "virtio=02:00:00:00:00:12,bridge=$NETWORK_BRIDGE,queues=4" >/dev/null
-    pct set "$NET_CT" --net0 "name=eth0,bridge=$NETWORK_BRIDGE,hwaddr=02:00:00:00:00:13,type=veth" >/dev/null
-    pct config "$NET_CT" >/dev/null 2>&1 || die "Disposable CT network fixture is not valid."
+
+    # Seed NIC configuration directly in stopped disposable configs. Fixture
+    # setup must not pre-test the same qm/pct network mutation API under test.
+    printf 'net0: virtio=02:00:00:00:00:11,bridge=%s,queues=2\n' "$NETWORK_BRIDGE" >> "/etc/pve/qemu-server/${NET_VM1}.conf"
+    printf 'net0: virtio=02:00:00:00:00:12,bridge=%s,queues=4\n' "$NETWORK_BRIDGE" >> "/etc/pve/qemu-server/${NET_VM2}.conf"
+    printf 'net0: name=eth0,bridge=%s,hwaddr=02:00:00:00:00:13,type=veth\n' "$NETWORK_BRIDGE" >> "/etc/pve/lxc/${NET_CT}.conf"
+
+    qm config "$NET_VM1" >/dev/null 2>&1 || die "First disposable QEMU network fixture is not valid."
+    qm config "$NET_VM2" >/dev/null 2>&1 || die "Second disposable QEMU network fixture is not valid."
+    pct config "$NET_CT" >/dev/null 2>&1 || die "Disposable LXC network fixture is not valid."
+
     NET_MISSING="$(allocate_free_vmid)" || die "Could not allocate missing-guest test ID."
 }
 

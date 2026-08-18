@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.4.1"
+    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.1"
     PLAN_FILE=""; RENAMED_FILE=""; COMPLETED=0
     CONFIG_CONTENT_CHANGED=0; CONFIG_MOVED=0; FIREWALL_MOVED=0
     parse_arguments "$@"

@@ -701,6 +701,39 @@ verify_storage_mapping() {
     if ! dryrun_enabled; then [ "$(readlink -f "$PVE_PATH")" = "$(readlink -f "$NEW_LV_PATH")" ] || die "Proxmox storage mapping does not point to the newly created LV."; fi
 }
 
+# ensure_source_device
+#
+# Activates an existing but inactive source LV only for the block-copy window.
+# The LV permission is not changed. SOURCE_ACTIVATED_BY_US records ownership of
+# that activation so release/cleanup can restore the original inactive state.
+ensure_source_device() {
+    [ -b "$SOURCE_PATH" ] && return 0
+    info "Source LV is inactive; temporarily activating it for the block copy..."
+    if dryrun_enabled; then
+        dryrun_cmd lvchange -ay "${SOURCE_VG}/${SOURCE_LV}"
+        SOURCE_ACTIVATED_BY_US=1
+        dryrun_verify "Source LV would be active and readable for the copy"
+        return 0
+    fi
+    run_lvm_filtered lvchange -ay "${SOURCE_VG}/${SOURCE_LV}" || die "Could not activate source LV for block copying: ${SOURCE_VG}/${SOURCE_LV}"
+    SOURCE_ACTIVATED_BY_US=1
+    [ -b "$SOURCE_PATH" ] || die "Source LV activation succeeded but no block device appeared: $SOURCE_PATH"
+    return 0
+}
+
+# release_source_device
+#
+# Restores an LV that this helper temporarily activated to its original
+# inactive state. Existing active sources are never deactivated.
+release_source_device() {
+    [ "$SOURCE_ACTIVATED_BY_US" -eq 1 ] || return 0
+    info "Restoring source LV to its original inactive state..."
+    if dryrun_enabled; then dryrun_cmd lvchange -an "${SOURCE_VG}/${SOURCE_LV}"
+    else run_lvm_filtered lvchange -an "${SOURCE_VG}/${SOURCE_LV}" || { warn "Could not deactivate source LV ${SOURCE_VG}/${SOURCE_LV} after copying."; return 1; }; fi
+    SOURCE_ACTIVATED_BY_US=0
+    return 0
+}
+
 copy_data() {
     info "Copying data..."
     if [ "$DEST_STORAGE_TYPE" = "lvmthin" ]; then dryrun_cmd dd if="$SOURCE_PATH" of="$NEW_LV_PATH" bs=4M iflag=fullblock conv=sparse,fsync status=progress
@@ -759,21 +792,21 @@ verify_destination_boot_first() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.4.4"
+    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.7"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
     SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
     REQUESTED_DEST_DISK=""; REQUESTED_DEST_SLOT_SELECTOR=""; REQUESTED_DEST_VG=""
     BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
-    CREATED=0; ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0
+    CREATED=0; ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; SOURCE_ACTIVATED_BY_US=0
     parse_arguments "$@"
     check_elevation
 }
 
 main() {
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs vgs lvcreate lvremove qm pvesm blockdev readlink awk grep sed dd cmp sort tail find
+    need_commands lvs vgs lvcreate lvremove lvchange qm pvesm blockdev readlink awk grep sed dd cmp sort tail find
     resolve_source
     validate_destination_vm
     resolve_destination_attachment
@@ -785,10 +818,12 @@ main() {
     print_plan
     install_transaction_traps
     apply_source_state
+    ensure_source_device
     create_destination
     verify_storage_mapping
     copy_data
     verify_copy
+    release_source_device || die "Could not restore the source LV activation state."
     attach_copy
     set_destination_boot_first "$DEST_VMID" "$SCSI_DEVICE"
     restore_source_state
@@ -846,6 +881,11 @@ DESTINATION SELECTORS
 
   Exact destination slots must be empty. Use an overwrite helper when the
   selected slot is already occupied.
+
+SOURCE ACTIVATION
+  If a valid LVM source exists but has no active block device (common for a
+  template/base LV), it is temporarily activated for copy/verification and
+  restored to inactive afterward. Its LVM permission is not changed.
 
 SOURCE VM STATE
   default/hot  Do not pause or stop the source VM.
@@ -1062,6 +1102,12 @@ cleanup_on_exit() {
     coe_status=$?
     trap - 0 HUP INT TERM
     set +e
+
+    if [ "$SOURCE_ACTIVATED_BY_US" -eq 1 ]; then
+        if dryrun_enabled; then dryrun_cmd lvchange -an "${SOURCE_VG}/${SOURCE_LV}"
+        else run_lvm_filtered lvchange -an "${SOURCE_VG}/${SOURCE_LV}" >/dev/null || warn "Could not restore source LV to inactive state: ${SOURCE_VG}/${SOURCE_LV}"; fi
+        SOURCE_ACTIVATED_BY_US=0
+    fi
 
     if [ "$MODE" = "pause" ] && [ "$PAUSED_BY_US" -eq 1 ] && [ -n "$SOURCE_VM" ]; then
         if dryrun_enabled; then dryrun_cmd qm resume "$SOURCE_VM"; else qm resume "$SOURCE_VM" >/dev/null 2>&1; fi

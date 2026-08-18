@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.0.1"
+    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.7"
     MOVE_ACTION="moved"
     parse_arguments "$@"
     check_elevation
@@ -428,6 +428,8 @@ USAGE
 DESCRIPTION
   Same-VG moves use lvrename in place. Cross-VG moves create and verify an
   independent copy first, then remove the source only after verification.
+  An inactive cross-VG source LV is temporarily activated only for the copy
+  and restored before the verified source is removed.
 
 EXAMPLES
   move-lvm.sh /dev/thinvg/vm-123-disk-1 /dev/thinvg/vm-123-disk-1-old
@@ -989,15 +991,15 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.0.1"
-    CREATED=0; COMPLETE=0
+    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.7"
+    CREATED=0; COMPLETE=0; SOURCE_ACTIVATED_BY_US=0
     parse_arguments "$@"
     check_elevation
 }
 
 main() {
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
-    need_commands lvs vgs lvcreate lvremove blockdev dmsetup findmnt readlink awk grep sed dd cmp mktemp
+    need_commands lvs vgs lvcreate lvremove lvchange blockdev dmsetup findmnt readlink awk grep sed dd cmp mktemp
     validate_source_and_destination
     assert_not_mounted "$SOURCE_PATH" || die "Unmount the source LV before copying it."
     assert_not_in_use "$SOURCE_PATH"
@@ -1007,9 +1009,11 @@ main() {
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    ensure_source_device
     create_destination
     copy_data
     verify_copy
+    release_source_device || die "Could not restore the source LV activation state."
     COMPLETE=1
 }
 
@@ -1040,6 +1044,11 @@ DESTINATION ALLOCATION
   one thin pool in dest VG use that thin pool
   no thin pool in dest VG  create a regular LV
   multiple thin pools      refuse as ambiguous
+
+SOURCE ACTIVATION
+  If the source LV exists in LVM metadata but is inactive (for example a
+  template/base LV), it is temporarily activated for the block copy and then
+  restored to inactive. The helper does not change the LV permission.
 
 EXAMPLES
   copy-lvm.sh /dev/thinvg/vm-123-disk-1 /dev/thinvg/vm-123-disk-1-copy
@@ -1094,7 +1103,7 @@ validate_source_and_destination() {
     SOURCE_VG="$(lvs --noheadings -o vg_name "$SOURCE" 2>/dev/null | trim)"
     SOURCE_LV="$(lvs --noheadings -o lv_name "$SOURCE" 2>/dev/null | trim)"
     SOURCE_POOL="$(lvs --noheadings -o pool_lv "$SOURCE" 2>/dev/null | trim)"
-    SOURCE_SIZE_BYTES="$(blockdev --getsize64 "$SOURCE_PATH")"
+    SOURCE_SIZE_BYTES="$(lvs --noheadings --units b --nosuffix -o lv_size "$SOURCE_PATH" 2>/dev/null | awk 'NF {printf "%.0f\n", $1; exit}' || :)"
     SOURCE_REAL="$(readlink -f "$SOURCE_PATH")"
 
     vsd_rel="${DESTINATION#/dev/}"; DEST_VG="${vsd_rel%%/*}"; DEST_LV="${vsd_rel#*/}"
@@ -1215,6 +1224,39 @@ create_destination() {
 
 # copy_data
 # Copies source blocks using sparse writes only for newly created thin destinations.
+# ensure_source_device
+#
+# Activates an existing but inactive source LV only for the block-copy window.
+# The LV permission is not changed. SOURCE_ACTIVATED_BY_US records ownership of
+# that activation so release/cleanup can restore the original inactive state.
+ensure_source_device() {
+    [ -b "$SOURCE_PATH" ] && return 0
+    info "Source LV is inactive; temporarily activating it for the block copy..."
+    if dryrun_enabled; then
+        dryrun_cmd lvchange -ay "${SOURCE_VG}/${SOURCE_LV}"
+        SOURCE_ACTIVATED_BY_US=1
+        dryrun_verify "Source LV would be active and readable for the copy"
+        return 0
+    fi
+    run_lvm_filtered lvchange -ay "${SOURCE_VG}/${SOURCE_LV}" || die "Could not activate source LV for block copying: ${SOURCE_VG}/${SOURCE_LV}"
+    SOURCE_ACTIVATED_BY_US=1
+    [ -b "$SOURCE_PATH" ] || die "Source LV activation succeeded but no block device appeared: $SOURCE_PATH"
+    return 0
+}
+
+# release_source_device
+#
+# Restores an LV that this helper temporarily activated to its original
+# inactive state. Existing active sources are never deactivated.
+release_source_device() {
+    [ "$SOURCE_ACTIVATED_BY_US" -eq 1 ] || return 0
+    info "Restoring source LV to its original inactive state..."
+    if dryrun_enabled; then dryrun_cmd lvchange -an "${SOURCE_VG}/${SOURCE_LV}"
+    else run_lvm_filtered lvchange -an "${SOURCE_VG}/${SOURCE_LV}" || { warn "Could not deactivate source LV ${SOURCE_VG}/${SOURCE_LV} after copying."; return 1; }; fi
+    SOURCE_ACTIVATED_BY_US=0
+    return 0
+}
+
 copy_data() {
     info "Copying data..."
     if [ "$DEST_MODE" = "thin" ]; then dryrun_cmd dd if="$SOURCE_PATH" of="$DEST_PATH" bs=4M iflag=fullblock conv=sparse,fsync status=progress
@@ -1256,15 +1298,22 @@ verify_copy() {
 cleanup_on_exit() {
     coe_status=$?
     trap - 0 HUP INT TERM
-    if dryrun_enabled || [ "$CREATED" -eq 0 ] || [ "$COMPLETE" -eq 1 ]; then
-        [ "$coe_status" -eq 0 ] || exit "$coe_status"
-        return 0
-    fi
-    warn "Removing incomplete destination LV: $DEST_PATH"
     set +e
-    lvremove -y "${DEST_VG}/${DEST_LV}" >/dev/null 2>&1 || warn "Could not remove $DEST_PATH automatically."
+
+    if [ "$SOURCE_ACTIVATED_BY_US" -eq 1 ]; then
+        if dryrun_enabled; then dryrun_cmd lvchange -an "${SOURCE_VG}/${SOURCE_LV}"
+        else run_lvm_filtered lvchange -an "${SOURCE_VG}/${SOURCE_LV}" >/dev/null || warn "Could not restore source LV to inactive state: ${SOURCE_VG}/${SOURCE_LV}"; fi
+        SOURCE_ACTIVATED_BY_US=0
+    fi
+
+    if ! dryrun_enabled && [ "$CREATED" -eq 1 ] && [ "$COMPLETE" -eq 0 ]; then
+        warn "Removing incomplete destination LV: $DEST_PATH"
+        lvremove -y "${DEST_VG}/${DEST_LV}" >/dev/null 2>&1 || warn "Could not remove $DEST_PATH automatically."
+    fi
+
     set -e
     [ "$coe_status" -eq 0 ] || exit "$coe_status"
+    return 0
 }
 
 ############################################################

@@ -389,7 +389,7 @@ dryrun_summary() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.0.1"
+    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.0.1"
     NEW_NAME=""; NET_FILE=""; TMP_FILE=""
     parse_arguments "$@"
     check_elevation

@@ -724,7 +724,7 @@ verify_destination_boot_first() {
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"; SCRIPT_VERSION="3.4.4"
+    PROJECT_VERSION="3.4.7"; SCRIPT_VERSION="3.4.4"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; 
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""

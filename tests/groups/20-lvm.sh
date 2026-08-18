@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"
-    TEST_SUITE_VERSION="2.8.2"
+    PROJECT_VERSION="3.4.7"
+    TEST_SUITE_VERSION="2.8.5"
     TEST_GROUP="lvm"
     test_reset_counters
     test_parse_arguments "$@"
@@ -24,11 +24,12 @@ main() {
     [ "$TEST_RUN" = "true" ] || { print_plan; return 0; }
     [ "$APP_ELEVATED" = "true" ] || self_elevate "$@"
     require_proxmox_environment
-    for CMD in dd cmp; do require_command "$CMD"; done
+    for CMD in dd cmp lvchange; do require_command "$CMD"; done
     test_prepare_run
     create_storage_sandbox
     create_regular_vg_sandbox
     run_case "copy-lvm.sh dry-run + thin independent copy" test_copy_lvm
+    run_case "copy-lvm.sh inactive source is temporarily activated and restored" test_copy_lvm_inactive_source
     run_case "copy-lvm.sh regular destination uses full writes" test_copy_lvm_regular
     run_case "move-lvm.sh dry-run + cross-VG move" test_move_lvm
     run_case "move-lvm.sh same-VG rename branch" test_move_lvm_same_vg
@@ -52,7 +53,7 @@ print_plan() {
     print_banner "Raw LVM tests"
     printf '%s\n' "Each case creates its own small thin LV inside disposable loopback VGs."
     printf '%s\n' "Every mutating command is first run with dryrun and compared against a state snapshot."
-    printf '%s\n' "Real operations cover thin and regular copy allocation, same-VG rename, cross-VG move, both rename CLI forms, and confirmed delete."
+    printf '%s\n' "Real operations cover active/inactive source copying, thin and regular allocation, same-VG rename, cross-VG move, both rename CLI forms, and confirmed delete."
     printf '%s\n' "A wrong delete confirmation is required to fail with exact test-owned state unchanged."
 }
 
@@ -70,6 +71,25 @@ test_copy_lvm() {
     assert_lv_exists "$TEST_VG_A/$tcl_name"
     assert_lv_exists "$TEST_VG_B/$tcl_name"
     cmp "$tcl_src" "$tcl_dst"
+}
+
+test_copy_lvm_inactive_source() {
+    tcli_name="plvt-copy-inactive-${TEST_TOKEN}"
+    tcli_src="$(create_thin_lv "$TEST_VG_A" "$tcli_name" 32M)"
+    tcli_dst="/dev/$TEST_VG_B/$tcli_name"
+    write_test_pattern "$tcli_src" "copy-lvm-inactive"
+    tcli_hash="$(sha256sum "$tcli_src" | awk '{print $1}')"
+    lvchange -an "$TEST_VG_A/$tcli_name" >/dev/null
+    [ ! -b "$tcli_src" ] || { printf 'Inactive-source fixture still has a block device: %s\n' "$tcli_src" >&2; return 1; }
+
+    run_dryrun_unchanged "copy-lvm-inactive-source" copy-lvm.sh "$tcli_src" "$tcli_dst"
+    [ ! -b "$tcli_src" ] || { printf 'Dry-run activated inactive source LV.\n' >&2; return 1; }
+
+    project_cmd copy-lvm.sh "$tcli_src" "$tcli_dst"
+    [ ! -b "$tcli_src" ] || { printf 'copy-lvm did not restore source LV to inactive state.\n' >&2; return 1; }
+    assert_lv_exists "$TEST_VG_A/$tcli_name"
+    assert_lv_exists "$TEST_VG_B/$tcli_name"
+    [ "$(sha256sum "$tcli_dst" | awk '{print $1}')" = "$tcli_hash" ]
 }
 
 test_move_lvm() {

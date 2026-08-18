@@ -1,13 +1,49 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.8.2**  
-Project target: **3.4.4**
+Test suite version: **2.8.5**  
+Project target: **3.4.7**
 
 This suite exercises all 42 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.8.5 — v3.4.7 inactive-source and network-fixture regression coverage
+
+The third current-generation real-host run executed 83 of the 86 registered cases: 82 passed, one independent-copy case failed, and the three network cases were blocked during fixture setup. Eight of ten groups were clean and all nine integration result directories had byte-identical protected before/after snapshots.
+
+The remaining helper defect was specific and reproducible: a template/base LV existed in LVM metadata and could be snapshotted, but was inactive, so `/dev/VG/base-VMID-disk-N` did not exist for `dd`. v3.4.7 adds activation-state preservation to raw and create-copy paths: an inactive source is activated with `lvchange -ay`, copied/verified, and restored with `lvchange -an`; already-active sources are never deactivated and LV permission metadata is never changed.
+
+The suite now adds:
+- a raw `copy-lvm.sh` inactive-source case that verifies dry-run non-activation, real copy success, content equality, and restoration to inactive state;
+- a create-copy overwrite case using the same inactive `base-*` source;
+- stronger assertions around the existing base/template copy-add case;
+- a network fixture contract that seeds stopped disposable NIC configs independently and validates them before the project helper becomes the first caller of the `qm set`/`pct set` network mutation API.
+
+The real integration definition is now **88 cases**.
+
+## v2.8.4 — v3.4.6 usage/documentation/style coverage
+
+v3.4.6 keeps the v3.4.4/v3.4.5 storage behavior and the 86-case real integration definition unchanged. The test suite adds a documentation contract requiring every public helper's `docs/<script>.sh.usage` file to match live `--help` output byte-for-byte, and requires every README helper heading to link the script, full documentation page and raw usage page.
+
+The style/documentation inventory now also requires the project lessons-learned document and the new Proxmox/POSIX-shell destructive-test best-practice guides.
+
+## v2.8.3 — v3.4.5 help/documentation coverage
+
+v3.4.5 does not change the v3.4.4 storage transaction semantics or the 86-case real integration definition. It adds a documentation/help contract across all 42 public helpers.
+
+The static suite now requires every public helper to:
+
+- return success for `--help` without crossing its elevation/preflight gate;
+- expose a `Usage` section or line in the `--help` output;
+- have exactly one linked helper heading in the project README;
+- have exactly one same-line `doc` link from that heading;
+- have a corresponding `docs/<helper>.md` page;
+- show its callable `./helper.sh --help` command on that page;
+- remain present exactly once in the test matrix and standalone install inventory.
+
+The per-helper documentation pages are generated from the public helper descriptions and the current built-in help output, then validated as normal repository artifacts.
 
 ## v2.8.2 — v3.4.4 second-real-run corrections
 

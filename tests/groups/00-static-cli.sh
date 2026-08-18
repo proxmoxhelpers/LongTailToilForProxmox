@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"
-    TEST_SUITE_VERSION="2.8.2"
+    PROJECT_VERSION="3.4.7"
+    TEST_SUITE_VERSION="2.8.5"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -42,7 +42,8 @@ main() {
     run_case "Negative/refusal helper proves state is unchanged" test_refusal_helper_contract
     run_case "Every public command has an integration reference" test_integration_reference_contract
     run_case "Every mutating command has a dry-run immutability case" test_mutating_dryrun_coverage_contract
-    run_case "README and test matrix cover every public command exactly once" test_public_documentation_coverage_contract
+    run_case "README script/doc/usage links and test matrix cover every public command" test_public_documentation_coverage_contract
+    run_case "Every .usage snapshot exactly matches live --help" test_usage_snapshot_contract
     run_case "LXC cleanup uses exact identity and owned-storage guards" test_ct_cleanup_safety_contract
     run_case "Protected baseline includes guest runtime and firewall state" test_protected_runtime_contract
     run_case "Cleanup fails closed between guest/storage/VG layers" test_layered_cleanup_contract
@@ -53,6 +54,8 @@ main() {
     run_case "Disk-bus changes sanitize incompatible iothread" test_bus_iothread_contract
     run_case "Emergency cleanup compares protected state" test_emergency_compare_contract
     run_case "Create helpers size managed sources from LVM metadata" test_create_source_size_contract
+    run_case "Copy helpers preserve inactive source-LV activation state" test_inactive_source_copy_contract
+    run_case "Network fixture setup does not pre-run the API under test" test_network_fixture_separation_contract
     run_case "Pause detach preflight rejects unsafe SCSI controller topology" test_pause_detach_preflight_contract
     run_case "Integration LVM-thin storages support LXC rootfs fixtures" test_lxc_rootfs_storage_contract
     run_case "--version for all project commands" test_all_versions
@@ -412,10 +415,36 @@ test_public_documentation_coverage_contract() {
 
     for tpdc_script in "$PROJECT_ROOT"/*.sh; do
         tpdc_name="$(basename "$tpdc_script")"
+        tpdc_stem="${tpdc_name%.sh}"
+        tpdc_doc="$PROJECT_ROOT/docs/${tpdc_stem}.md"
+        tpdc_usage="$PROJECT_ROOT/docs/${tpdc_name}.usage"
         tpdc_count=$((tpdc_count + 1))
 
-        [ "$(grep -Fc "#### \`$tpdc_name\`" "$tpdc_readme")" -eq 1 ] || {
-            printf 'README must contain exactly one helper heading for %s.\n' "$tpdc_name" >&2
+        tpdc_heading="#### [\`$tpdc_name\`]($tpdc_name) · [doc](docs/${tpdc_stem}.md) · [usage](docs/${tpdc_name}.usage)"
+        [ "$(grep -Fc "$tpdc_heading" "$tpdc_readme")" -eq 1 ] || {
+            printf 'README must contain exactly one linked script/doc/usage heading for %s.\n' "$tpdc_name" >&2
+            return 1
+        }
+
+        [ -f "$tpdc_doc" ] || {
+            printf 'Missing per-helper documentation page: %s\n' "$tpdc_doc" >&2
+            return 1
+        }
+        [ -f "$tpdc_usage" ] || {
+            printf 'Missing per-helper usage snapshot: %s\n' "$tpdc_usage" >&2
+            return 1
+        }
+
+        grep -F "# \`$tpdc_name\`" "$tpdc_doc" >/dev/null || {
+            printf 'Documentation page title does not match helper %s.\n' "$tpdc_name" >&2
+            return 1
+        }
+        grep -F "./$tpdc_name --help" "$tpdc_doc" >/dev/null || {
+            printf 'Documentation page does not show callable --help for %s.\n' "$tpdc_name" >&2
+            return 1
+        }
+        grep -F "[Raw usage](./${tpdc_name}.usage)" "$tpdc_doc" >/dev/null || {
+            printf 'Documentation page does not link raw usage snapshot for %s.\n' "$tpdc_name" >&2
             return 1
         }
 
@@ -435,6 +464,25 @@ test_public_documentation_coverage_contract() {
         printf 'Expected 42 public commands, found %s.\n' "$tpdc_count" >&2
         return 1
     }
+}
+
+# Verifies shipped usage snapshots are exact executable help output.
+test_usage_snapshot_contract() {
+    tusc_tmp="$TEST_DATA_DIR/live-help.txt"
+    for tusc_script in "$PROJECT_ROOT"/*.sh; do
+        tusc_name="$(basename "$tusc_script")"
+        tusc_usage="$PROJECT_ROOT/docs/${tusc_name}.usage"
+        sh "$tusc_script" --help >"$tusc_tmp" 2>&1 || {
+            printf '%s --help returned non-zero while validating usage snapshot.\n' "$tusc_name" >&2
+            return 1
+        }
+        cmp -s "$tusc_tmp" "$tusc_usage" || {
+            printf 'Usage snapshot differs from live --help: %s\n' "$tusc_name" >&2
+            return 1
+        }
+    done
+    rm -f "$tusc_tmp"
+    return 0
 }
 
 # Ensures cleanup cannot purge a named test VM unless every storage-backed
@@ -637,6 +685,52 @@ test_create_source_size_contract() {
 }
 
 # Real Proxmox rejected pause-mode hot-unplug of the per-disk/last SCSI
+# Ensures block-copy helpers can read an inactive template/base LV without
+# leaving it activated afterward or changing its read-only permission.
+test_inactive_source_copy_contract() {
+    for tisc_name in copy-lvm.sh create-disk-copy-and-add-to-vm.sh create-disk-copy-and-overwrite-disk-on-vm.sh; do
+        tisc_script="$PROJECT_ROOT/$tisc_name"
+        grep -F 'SOURCE_ACTIVATED_BY_US=0' "$tisc_script" >/dev/null || return 1
+        grep -F 'ensure_source_device()' "$tisc_script" >/dev/null || return 1
+        grep -F 'release_source_device()' "$tisc_script" >/dev/null || return 1
+        grep -F 'lvchange -ay "${SOURCE_VG}/${SOURCE_LV}"' "$tisc_script" >/dev/null || return 1
+        grep -F 'lvchange -an "${SOURCE_VG}/${SOURCE_LV}"' "$tisc_script" >/dev/null || return 1
+        grep -F '[ -b "$SOURCE_PATH" ] && return 0' "$tisc_script" >/dev/null || return 1
+    done
+
+    grep -F 'lvs --noheadings --units b --nosuffix -o lv_size "$SOURCE_PATH"' "$PROJECT_ROOT/copy-lvm.sh" >/dev/null || return 1
+    if grep -F 'blockdev --getsize64 "$SOURCE_PATH"' "$PROJECT_ROOT/copy-lvm.sh" >/dev/null 2>&1; then
+        printf 'copy-lvm.sh still requires an active source block device to determine LV size.\n' >&2
+        return 1
+    fi
+
+    # Activation must not change LV permission metadata.
+    if grep -E 'lvchange[[:space:]].*(-p|--permission)' "$PROJECT_ROOT/copy-lvm.sh" "$PROJECT_ROOT/create-disk-copy-and-add-to-vm.sh" "$PROJECT_ROOT/create-disk-copy-and-overwrite-disk-on-vm.sh" >/dev/null 2>&1; then
+        printf 'Inactive-source activation must not alter LV permission metadata.\n' >&2
+        return 1
+    fi
+    return 0
+}
+
+# Fixture setup should establish stopped synthetic NIC configs without calling
+# the same qm/pct network mutation API that bulk-change-vm-network.sh is meant
+# to exercise. Otherwise a fixture failure can abort the group before a case.
+test_network_fixture_separation_contract() {
+    tnfs_group="$TEST_ROOT/groups/90-network.sh"
+    tnfs_body="$(awk '/^prepare_network_fixture\(\)/,/^}/' "$tnfs_group")"
+
+    if printf '%s\n' "$tnfs_body" | grep -E '(^|[[:space:]])(qm|pct)[[:space:]]+set([[:space:]]|$)' >/dev/null 2>&1; then
+        printf 'Network fixture setup must not pre-run qm/pct set for the NIC operation under test.\n' >&2
+        return 1
+    fi
+
+    printf '%s\n' "$tnfs_body" | grep -F '/etc/pve/qemu-server/${NET_VM1}.conf' >/dev/null || return 1
+    printf '%s\n' "$tnfs_body" | grep -F '/etc/pve/lxc/${NET_CT}.conf' >/dev/null || return 1
+    printf '%s\n' "$tnfs_body" | grep -F 'qm config "$NET_VM1"' >/dev/null || return 1
+    printf '%s\n' "$tnfs_body" | grep -F 'pct config "$NET_CT"' >/dev/null || return 1
+    return 0
+}
+
 # controller. Ensure move/overwrite helpers refuse that topology before mutation.
 test_pause_detach_preflight_contract() {
     for tpdpc_name in \
@@ -659,8 +753,13 @@ test_lxc_rootfs_storage_contract() {
         printf 'Disposable lvmthin test storages do not advertise rootdir content.\n' >&2
         return 1
     }
+    grep -F 'attach_test_ct_lv "$NET_CT" "$TEST_STORAGE_A" "$NET_CT_ROOT_NAME" rootfs 16M' "$TEST_ROOT/groups/90-network.sh" >/dev/null || return 1
     grep -F 'pct config "$NET_CT"' "$TEST_ROOT/groups/90-network.sh" >/dev/null || return 1
-    grep -F 'pct set "$NET_CT" --net0' "$TEST_ROOT/groups/90-network.sh" >/dev/null || return 1
+    grep -F 'ug_cmd=pct' "$PROJECT_ROOT/bulk-change-vm-network.sh" >/dev/null || return 1
+    grep -F 'dryrun_cmd "$ug_cmd" set "$ug_id" "--$NIC" "$ug_value"' "$PROJECT_ROOT/bulk-change-vm-network.sh" >/dev/null || {
+        printf 'bulk-change-vm-network.sh no longer exercises qm/pct set for NIC updates.\n' >&2
+        return 1
+    }
     return 0
 }
 
@@ -674,7 +773,16 @@ test_all_versions() {
 
 # Help must remain usable before privilege/environment checks.
 test_all_help() {
-    for tah_script in "$PROJECT_ROOT"/*.sh; do sh "$tah_script" --help >/dev/null; done
+    for tah_script in "$PROJECT_ROOT"/*.sh; do
+        tah_output="$(sh "$tah_script" --help)" || {
+            printf '%s --help returned non-zero.\n' "$(basename "$tah_script")" >&2
+            return 1
+        }
+        printf '%s\n' "$tah_output" | grep -Ei '^[[:space:]]*usage([[:space:]]|:|$)' >/dev/null || {
+            printf '%s --help does not expose a Usage section/line.\n' "$(basename "$tah_script")" >&2
+            return 1
+        }
+    done
 }
 
 test_all_dryrun_prefix() {
@@ -688,7 +796,15 @@ test_all_dryrun_suffix() {
 test_style_documents() {
     [ -f "$PROJECT_ROOT/docs/POSIX-SHELL-STYLE-GUIDE-v3.md" ] || return 1
     [ -f "$PROJECT_ROOT/docs/STYLE-PROFILES-AND-EXCEPTIONS.md" ] || return 1
+    [ -f "$PROJECT_ROOT/docs/PROXMOX-SHELL-SCRIPTING-LESSONS-LEARNED.md" ] || return 1
     [ -f "$PROJECT_ROOT/docs/testing/TEST-SYSTEM-DESIGN-GUIDE.md" ] || return 1
+    [ -f "$PROJECT_ROOT/docs/testing/PROXMOX-TEST-HARNESS-BEST-PRACTICES.md" ] || return 1
+    [ -f "$PROJECT_ROOT/docs/testing/POSIX-SHELL-TEST-HARNESS-BEST-PRACTICES.md" ] || return 1
+    [ -f "$PROJECT_ROOT/docs/testing/DESTRUCTIVE-SYSTEM-TEST-SAFETY-CHECKLIST.md" ] || return 1
+
+    grep -F '## 54. Distinguish config-reference removal from resource deletion' "$PROJECT_ROOT/docs/POSIX-SHELL-STYLE-GUIDE-v3.md" >/dev/null || return 1
+    grep -F '## 60. Guest state semantics must include device topology' "$PROJECT_ROOT/docs/POSIX-SHELL-STYLE-GUIDE-v3.md" >/dev/null || return 1
+    grep -F '## 64. Help and usage are stable public interfaces' "$PROJECT_ROOT/docs/POSIX-SHELL-STYLE-GUIDE-v3.md" >/dev/null || return 1
 }
 
 # Regression test: dryrun_summary must not make a successful normal-mode

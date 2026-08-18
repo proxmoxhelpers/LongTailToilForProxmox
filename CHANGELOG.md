@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.4.7 — 2026-08-17
+
+Third real-Proxmox integration-run corrections.
+
+- The latest run executed 83 of 86 registered real cases: 82 passed, one copy-helper case failed, and three network cases were blocked during fixture setup; eight of ten groups were otherwise clean.
+- All nine integration result directories had byte-identical protected before/after state across VG/PV/LV metadata, storage semantics, guest configs, guest runtime status and firewall checksums.
+- `copy-lvm.sh`, `create-disk-copy-and-add-to-vm.sh`, and `create-disk-copy-and-overwrite-disk-on-vm.sh` now temporarily activate an existing inactive source LV for block copy/verification and restore it to inactive afterward without changing LV permission metadata.
+- The corrected raw copy implementation is re-embedded into `move-lvm.sh`; corrected create-copy logic is re-embedded into `copy-disk-between-vms.sh` and `clone-single-vm-disk.sh`.
+- Raw `copy-lvm.sh` source size now comes from authoritative `lvs` metadata, removing another active-device assumption.
+- Added real inactive-source regression cases for raw copy and create-copy overwrite; the existing base/template copy-add case now explicitly requires the source to remain inactive before and after the operation.
+- Network fixture setup no longer calls `qm set`/`pct set` for the NIC operation under test. It seeds stopped disposable configs directly, validates them with `qm config`/`pct config`, then lets the registered project-helper case perform the first network mutation.
+- Expanded lessons/style/testing documentation with activation-state preservation and fixture/API separation guidance.
+- Test-suite metadata is now 2.8.5 with 88 real integration cases.
+
+## 3.4.6 — 2026-08-17
+
+Documentation, usage-snapshot and engineering-lessons release; no storage transaction semantics changed from v3.4.4/v3.4.5.
+
+- Added `docs/PROXMOX-SHELL-SCRIPTING-LESSONS-LEARNED.md`, capturing concrete Proxmox/LVM/POSIX-shell pitfalls discovered during development and real-host integration testing.
+- Added three new testing best-practice guides for Proxmox fixtures, POSIX shell harness design and destructive-test safety.
+- Expanded `docs/POSIX-SHELL-STYLE-GUIDE-v3.md` with explicit rules for exit-status contracts, `set -e` guard traps, config-reference versus storage deletion, UUID identity across renames, conservative rollback, value classes, authoritative metadata, bus-option compatibility, paused-controller topology, external utility option compatibility and help/usage stability.
+- Added 42 verbatim `docs/<script>.sh.usage` files generated from each helper's live `--help` output.
+- Updated all 42 helper documentation pages to link their raw usage snapshot and embed the current v3.4.6 help/version output.
+- Updated every README helper heading to `script · doc · usage`, with direct links to the executable, documentation page and usage snapshot.
+- Updated `docs/HELPERS.md` to index script, documentation and usage pages.
+- Strengthened static coverage so each helper must return successful `--help` with a Usage section and its `.usage` file must match live help byte-for-byte.
+
+## 3.4.5 — 2026-08-17
+
+Per-helper help and documentation hardening.
+
+- Audited all 42 public helpers: every `--help` path returns success and exposes a usage section/line before elevation or operation preflight.
+- Added one documentation page under `docs/` for every public helper, containing purpose, built-in help, install command, README examples, safety notes and version information.
+- Added `docs/HELPERS.md` as the complete 42-helper documentation index.
+- Changed every README helper heading to link the script filename directly and include a same-line `doc` link to its per-helper page.
+- Strengthened static coverage so `--help` must contain usage text and every public helper must have exactly one README script/doc heading plus an existing matching documentation page.
+- Bumped the test-suite metadata to 2.8.3 without changing the 86-case real integration definition or v3.4.4 storage transaction semantics.
+
 ## 3.4.4 — 2026-08-17
 
 Second real-Proxmox integration-run corrections.

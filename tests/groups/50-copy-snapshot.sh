@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.4.4"
-    TEST_SUITE_VERSION="2.8.2"
+    PROJECT_VERSION="3.4.7"
+    TEST_SUITE_VERSION="2.8.5"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -36,6 +36,7 @@ main() {
     run_case "overwrite helpers pause refuse unsafe sole-SCSI topology" test_overwrite_pause_sole_scsi_refusal
     run_case "create-disk-snapshot-and-add-to-vm.sh base/template naming" test_create_base_snapshot_add
     run_case "create-disk-copy-and-add-to-vm.sh base/template naming" test_create_base_copy_add
+    run_case "create-disk-copy-and-overwrite-disk-on-vm.sh inactive base source" test_create_base_copy_overwrite_source
     run_case "create-disk-snapshot-and-overwrite-disk-on-vm.sh base/template naming" test_create_base_snapshot_overwrite
     run_case "create-disk-copy-and-overwrite-disk-on-vm.sh preserve + same disk number" test_create_copy_overwrite
     run_case "create-disk-copy-and-overwrite-disk-on-vm.sh delete + same disk number" test_create_copy_overwrite_delete
@@ -141,6 +142,8 @@ prepare_copy_fixture() {
     BASE_SRC_NAME="base-${BASE_SRC_VM}-disk-0"
     BASE_SRC_LV="/dev/${TEST_VG_A}/${BASE_SRC_NAME}"
     assert_lv_exists "$TEST_VG_A/$BASE_SRC_NAME"
+    lvchange -an "$TEST_VG_A/$BASE_SRC_NAME" >/dev/null || die "Could not make the disposable base source inactive."
+    [ ! -b "$BASE_SRC_LV" ] || die "Disposable base source is still active; inactive-source coverage would be invalid."
 
     BASE_DST_VM="$(create_test_vm base-copy-dst)"
     BASE_DST_SEED="vm-${BASE_DST_VM}-disk-0"
@@ -156,6 +159,12 @@ prepare_copy_fixture() {
     qm template "$BASE_COPY_DST_VM" >/dev/null
     assert_lv_exists "$TEST_VG_A/base-${BASE_COPY_DST_VM}-disk-0"
 
+    BASE_COPY_OVERWRITE_VM="$(create_test_vm base-copy-overwrite)"
+    BASE_COPY_OVERWRITE_OLD_NAME="vm-${BASE_COPY_OVERWRITE_VM}-disk-0"
+    BASE_COPY_OVERWRITE_OLD_LV="$(create_thin_lv "$TEST_VG_B" "$BASE_COPY_OVERWRITE_OLD_NAME" 32M)"
+    write_test_pattern "$BASE_COPY_OVERWRITE_OLD_LV" "base-copy-overwrite-old"
+    attach_test_lv "$BASE_COPY_OVERWRITE_VM" "$TEST_STORAGE_B" "$BASE_COPY_OVERWRITE_OLD_NAME" scsi0
+
     BASE_OVERWRITE_VM="$(create_test_vm base-overwrite)"
     BASE_OVERWRITE_SEED="vm-${BASE_OVERWRITE_VM}-disk-0"
     create_thin_lv "$TEST_VG_B" "$BASE_OVERWRITE_SEED" 32M >/dev/null
@@ -167,6 +176,24 @@ prepare_copy_fixture() {
 ############################################################
 # TEST CASES
 ############################################################
+
+assert_test_lv_inactive() {
+    atli_lv="$1"
+    atli_attr="$(lvs --noheadings -o lv_attr "$atli_lv" 2>/dev/null | awk '{$1=$1;print}')"
+    case "$atli_attr" in ????a*) printf 'Expected LV to be inactive, but lv_attr is %s: %s\n' "$atli_attr" "$atli_lv" >&2; return 1 ;; esac
+    atli_path="$(lvs --noheadings -o lv_path "$atli_lv" 2>/dev/null | awk '{$1=$1;print}')"
+    [ -n "$atli_path" ] || return 1
+    [ ! -b "$atli_path" ]
+}
+
+compare_inactive_test_lv() (
+    citl_lv="$1"; citl_dst="$2"; citl_bytes="$3"
+    citl_path="$(lvs --noheadings -o lv_path "$citl_lv" 2>/dev/null | awk '{$1=$1;print}')"
+    [ -n "$citl_path" ] || exit 1
+    trap 'lvchange -an "$citl_lv" >/dev/null 2>&1 || :' 0 HUP INT TERM
+    lvchange -ay "$citl_lv" >/dev/null
+    cmp -n "$citl_bytes" "$citl_path" "$citl_dst"
+)
 
 test_create_snapshot_add() {
     qm start "$COPY_SRC_VM" >/dev/null
@@ -277,7 +304,29 @@ test_create_base_copy_add() {
     tcbca_volid="$(qm config "$BASE_COPY_DST_VM" | sed -n 's/^virtio0:[[:space:]]*//p' | head -n1 | cut -d, -f1)"
     [ "$tcbca_volid" = "$TEST_STORAGE_B:$tcbca_name" ]
     assert_lv_exists "$TEST_VG_B/$tcbca_name"
-    cmp -n 33554432 "$BASE_SRC_LV" "/dev/${TEST_VG_B}/${tcbca_name}"
+    assert_test_lv_inactive "$TEST_VG_A/$BASE_SRC_NAME"
+    compare_inactive_test_lv "$TEST_VG_A/$BASE_SRC_NAME" "/dev/${TEST_VG_B}/${tcbca_name}" 33554432
+    assert_test_lv_inactive "$TEST_VG_A/$BASE_SRC_NAME"
+}
+
+test_create_base_copy_overwrite_source() {
+    tcbcos_old_uuid="$(lvs --noheadings -o lv_uuid "$BASE_COPY_OVERWRITE_OLD_LV" | awk '{$1=$1;print}')"
+    tcbcos_final_name="vm-${BASE_COPY_OVERWRITE_VM}-disk-0"
+    tcbcos_archive_name="vm-${BASE_COPY_OVERWRITE_VM}-disk-901"
+
+    assert_test_lv_inactive "$TEST_VG_A/$BASE_SRC_NAME"
+    run_dryrun_unchanged "create-base-copy-overwrite-source" create-disk-copy-and-overwrite-disk-on-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_COPY_OVERWRITE_VM" disk-0
+    assert_test_lv_inactive "$TEST_VG_A/$BASE_SRC_NAME"
+
+    project_cmd create-disk-copy-and-overwrite-disk-on-vm.sh "$BASE_SRC_VM" disk-0 "$BASE_COPY_OVERWRITE_VM" disk-0
+    assert_test_lv_inactive "$TEST_VG_A/$BASE_SRC_NAME"
+
+    [ "$(qm config "$BASE_COPY_OVERWRITE_VM" | sed -n 's/^scsi0:[[:space:]]*//p' | head -n1 | cut -d, -f1)" = "$TEST_STORAGE_B:$tcbcos_final_name" ]
+    assert_lv_exists "$TEST_VG_B/$tcbcos_final_name"
+    assert_lv_exists "$TEST_VG_B/$tcbcos_archive_name"
+    [ "$(lvs --noheadings -o lv_uuid "/dev/${TEST_VG_B}/${tcbcos_archive_name}" | awk '{$1=$1;print}')" = "$tcbcos_old_uuid" ]
+    compare_inactive_test_lv "$TEST_VG_A/$BASE_SRC_NAME" "/dev/${TEST_VG_B}/${tcbcos_final_name}" 33554432
+    assert_test_lv_inactive "$TEST_VG_A/$BASE_SRC_NAME"
 }
 
 test_create_base_snapshot_overwrite() {
