@@ -1,0 +1,30 @@
+verify-vm-disk-numbering.sh 1.1.0 (project 3.4.7)
+
+USAGE
+  verify-vm-disk-numbering.sh [dryrun]
+
+DESCRIPTION
+  Lists every LVM volume referenced by Proxmox QEMU/LXC guests and verifies
+  managed Proxmox disk numbering.
+
+  Red rows identify managed LVs whose embedded VMID does not match the guest
+  that references them, for example VM 199 -> base-100-disk-1.
+
+  Yellow guest headings identify ACTIVE managed LVM disk-number problems:
+  numbering that does not start at disk-0, gaps in the sequence, or duplicate
+  disk-N values. unusedN entries are listed but do not participate in the
+  active numbering sequence.
+
+  Both vm-VMID-disk-N and base-VMID-disk-N are recognized. All LVs not
+  referenced by a visible guest are listed at the end.
+
+COLOURS
+  green   numbering looks consistent
+  yellow  active managed disk numbering does not start at 0
+  red     an LV embeds a different VMID than the guest that references it
+  cyan    informational / unmanaged LVM reference
+
+Dry-run:
+  Add dryrun or --dryrun anywhere on the command line.
+  Read-only preflight checks still run, but modifying commands are printed
+  instead of executed and mutation-dependent verification is simulated.

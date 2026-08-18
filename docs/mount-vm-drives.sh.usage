@@ -1,0 +1,19 @@
+mount-vm-drives.sh 3.0.0 (project 3.4.7)
+
+USAGE
+  mount-vm-drives.sh <lvm-volume-path> [mount-root] [--ro|--rw] [dryrun]
+
+DESCRIPTION
+  Exposes and mounts recognizable filesystems from an LVM-backed VM disk.
+  Partitioned media is mapped through kpartx; a filesystem directly on the LV
+  is mounted as part1. Read-only is the default.
+
+EXAMPLES
+  mount-vm-drives.sh /dev/thinvg/vm-123-disk-1
+  mount-vm-drives.sh /dev/thinvg/vm-123-disk-1 /mnt/vm123
+  mount-vm-drives.sh /dev/thinvg/vm-123-disk-1 --rw
+
+Dry-run:
+  Add dryrun or --dryrun anywhere on the command line.
+  Read-only preflight checks still run, but modifying commands are printed
+  instead of executed and mutation-dependent verification is simulated.

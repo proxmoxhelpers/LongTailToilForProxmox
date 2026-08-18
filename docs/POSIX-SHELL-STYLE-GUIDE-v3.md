@@ -1,10 +1,10 @@
 # POSIX Shell Programming Style Guide — Proxmox LVM Tools v3
 
-This guide defines the coding style for the future v3 rewrite of Proxmox LVM Tools.
+This guide defines the coding style for the v3-era Proxmox LongTail Toil shell helpers and their continued maintenance.
 
 The goals are to make every script easy to scan, internally documented, compact without becoming cryptic, conservative around destructive operations, and understandable independently even when common helpers are shared.
 
-This guide defines style only. v3 scripts should be rewritten and tested individually rather than generated as one untested bulk conversion.
+This guide defines style and maintenance conventions. Material behavior changes should still be reviewed and tested per helper rather than introduced as an unvalidated bulk conversion.
 
 ## 1. Language and interpreter
 
@@ -620,7 +620,311 @@ Dry-run is a simulation mode, not a validation bypass:
 The POSIX v3 implementation must not rely on Bash `printf %q`; it should use a POSIX-safe command-rendering helper.
 
 
-## 52. v3 rewrite acceptance checklist
+## 52. Exit-status contracts are part of the interface
+
+Every public operation must define what success and failure mean.
+
+Examples:
+
+```text
+requested mutation completed       -> 0
+read-only lookup found no matches  -> 0 when "none" is valid data
+user cancelled destructive action  -> non-zero
+preflight refused unsafe state      -> non-zero
+verification failed                 -> non-zero
+rollback only partially succeeded   -> non-zero
+```
+
+Do not print "Cancelled", "Skipped", or "Failed" and then accidentally return 0 because the last command happened to succeed.
+
+For helper functions, do not let an incidental final command silently define the function's return contract.
+
+## 53. Avoid `set -e` short-circuit guard traps
+
+Under `set -e`, do not write a negative-existence guard as:
+
+```sh
+lvs "$TARGET" >/dev/null 2>&1 && die "Target already exists."
+```
+
+A false left-hand command can escape as the function status depending on shell context.
+
+Prefer an explicit conditional:
+
+```sh
+if lvs "$TARGET" >/dev/null 2>&1; then die "Target already exists."; fi
+```
+
+The same rule applies to other "command succeeded, therefore fail" guards.
+
+Functions that intentionally accept empty/no-match results should explicitly return 0 after collecting them.
+
+## 54. Distinguish config-reference removal from resource deletion
+
+With Proxmox, a CLI option that removes a config key can also free its backing resource.
+
+Do not assume:
+
+```sh
+qm set "$VMID" --delete unused0
+```
+
+is equivalent to "remove only this line from the VM config".
+
+Before using any Proxmox deletion primitive, document whether it can:
+
+```text
+remove a config reference;
+free storage;
+destroy a snapshot;
+detach a runtime device;
+or perform more than one of these.
+```
+
+If a transaction must preserve the backing LV, use a proven config-only update path and independently verify the LV still exists by UUID.
+
+## 55. Use durable identity across renames
+
+Names and paths are mutable labels.
+
+Before `lvrename`, capture:
+
+```sh
+LV_UUID="$(lvs --noheadings -o lv_uuid "$LV" | trim)"
+```
+
+After rename, verify the object by UUID rather than comparing against a stale old path.
+
+For multi-step rename transactions, track:
+
+```text
+original name
+temporary name
+final name
+LV UUID
+```
+
+Do not use a pre-rename path as the durable identity of the object.
+
+## 56. Rollback primitives must be conservative
+
+Rollback is not permission to use broader operations than the forward path.
+
+A rollback sequence must not delete a config key using a primitive that can free the very LV being restored.
+
+Before the first mutation, define:
+
+```text
+what constitutes a committed result;
+what objects are recoverable before commit;
+which identities prove those objects;
+which operations can restore them without deletion side effects.
+```
+
+If rollback cannot prove an object's identity, stop and preserve recoverable state rather than guessing.
+
+## 57. Treat slots, volume IDs, LV paths and UUIDs as different value classes
+
+Do not blur:
+
+```text
+scsi0
+local-lvm:vm-123-disk-0
+/dev/pve/vm-123-disk-0
+vm-123-disk-0
+<LV UUID>
+```
+
+Give variables names that reveal the class:
+
+```text
+SOURCE_SLOT
+SOURCE_VOLID
+SOURCE_PATH
+SOURCE_LV_NAME
+SOURCE_LV_UUID
+```
+
+Convert explicitly at boundaries. This reduces accidental comparison of a storage ID with a path or a pre-rename path with a post-rename object.
+
+## 58. Use authoritative metadata from the owning subsystem
+
+Ask LVM for LVM metadata.
+
+For example, use `lvs -o lv_size` to determine an LV's configured size rather than assuming `blockdev --getsize64` is valid for every template/base activation state.
+
+Use `blockdev` for block-device interface properties when an active device interface is what matters.
+
+Likewise:
+
+```text
+qm/pct config -> configured guest state
+pvesm path    -> Proxmox storage resolution
+lvs           -> LV identity/size/pool/origin
+findmnt       -> mount truth
+dmsetup       -> device-mapper open state
+```
+
+Prefer the subsystem's own metadata over inference from names.
+
+Existence in LVM metadata does not guarantee an active block-device node. When a helper must perform block I/O against an inactive LV:
+
+```text
+1. record that the LV was originally inactive;
+2. activate it with `lvchange -ay`;
+3. verify the block device exists;
+4. perform and verify the I/O;
+5. deactivate it with `lvchange -an`;
+6. make cleanup restore inactivity after any intermediate failure.
+```
+
+Never deactivate a source that was already active before the helper ran, and do not change LV permission metadata merely to obtain a device node.
+
+## 59. Device-bus changes require option compatibility
+
+Disk options are not universally valid across:
+
+```text
+scsi
+virtio
+sata
+ide
+```
+
+When moving a configured disk value to another bus:
+
+1. parse the existing options;
+2. preserve compatible options;
+3. remove or transform incompatible options;
+4. warn about any option that is dropped;
+5. validate the resulting config with Proxmox.
+
+For example, `iothread=1` may be valid on SCSI/VirtIO but invalid on SATA/IDE.
+
+Do not mechanically copy a full option string between buses.
+
+## 60. Guest state semantics must include device topology
+
+`running`, `paused`, and `stopped` are not enough to determine whether a hot-unplug is safe.
+
+For SCSI operations also consider:
+
+```text
+controller model;
+whether the target disk is the only disk on that controller;
+whether removing the disk causes controller removal;
+whether Proxmox supports that runtime transition.
+```
+
+A paused VM can still reject disk removal because the operation implies hot-unplugging `scsihw0` or `virtioscsi0`.
+
+Refuse unsupported topologies before mutation and recommend `stop`/`restart` rather than bypassing Proxmox runtime state with direct config editing.
+
+## 61. Direct config editing is not a live-device substitute
+
+Direct `/etc/pve` editing is acceptable only for narrowly understood config-only changes where the supported CLI would have unwanted side effects and runtime state is not being bypassed.
+
+Never edit a running/paused guest config to simulate successful hot-unplug when QEMU may still have the device open.
+
+When direct editing is justified:
+
+```text
+make a backup;
+edit the smallest exact key/value;
+validate config parsing;
+verify the intended storage object separately;
+verify no runtime ownership assumption was violated.
+```
+
+## 62. External utility option combinations require target-host testing
+
+Shell syntax can be valid while a utility invocation is invalid.
+
+Example discovered during integration testing:
+
+```sh
+partx --show --raw ...
+```
+
+was rejected because those modes were mutually exclusive on the target host.
+
+Use the smallest option set needed and add a regression test for every target-host incompatibility discovered.
+
+Do not infer utility compatibility from shell parsing alone.
+
+## 63. Separate partition intent from content format
+
+Partition-table metadata and actual filesystem/container signatures are independent facts.
+
+Report separately:
+
+```text
+TABLE_HINT
+CONTENT_FORMAT
+```
+
+A broad table type such as "Linux filesystem" can legitimately contain ext4, Btrfs, XFS, or LUKS. A definite incompatible relationship should be called out rather than collapsed into one field.
+
+Read-only inspection should avoid mounts/mappers where offset probing can answer the question safely.
+
+## 64. Help and usage are stable public interfaces
+
+Every public helper must support:
+
+```sh
+./helper.sh --help
+./helper.sh --version
+```
+
+before privilege checks and operational preflight.
+
+`--help` must:
+
+```text
+return 0;
+contain a Usage section/line;
+describe required selectors/keywords;
+state destructive/state behavior that materially affects use;
+work on a non-Proxmox/non-root documentation host.
+```
+
+If usage snapshots are shipped, generate them from live `--help` output and test them for exact equality.
+
+## 65. Keep test-only dependencies explicit
+
+Integration groups must not accidentally depend on helper functions that happen to exist in project scripts but are not loaded by the test harness.
+
+If a test uses:
+
+```text
+trim
+assert_lv_exists
+create_test_vm
+```
+
+that function must be defined by the sourced test library or implemented locally.
+
+Static coverage should reject known undefined convenience helpers.
+
+## 66. Test harness cleanup is production-grade destructive code
+
+Cleanup code follows the same style rules as product code:
+
+```text
+exact identity before deletion;
+narrow ownership proof;
+dependency-ordered teardown;
+no broad wildcard deletion;
+explicit refusal on uncertainty;
+post-cleanup verification.
+```
+
+A trap path must still capture protected after-state and compare it to the baseline.
+
+Do not optimize cleanup for "always empty afterward". Optimize it for "never delete an unproven object".
+
+
+## 67. v3 rewrite acceptance checklist
 
 A script is not ready for v3 until all applicable items pass:
 
@@ -661,8 +965,23 @@ A script is not ready for v3 until all applicable items pass:
 - [ ] Final output clearly states what changed.
 - [ ] Required manual follow-up is explicitly listed.
 - [ ] The script is tested independently before being admitted to v3.
+- [ ] Success, cancellation, refusal and verification-failure exit statuses are explicit.
+- [ ] No `cmd && die` / equivalent `set -e` guard trap remains.
+- [ ] Config-reference deletion is distinguished from backing-resource deletion.
+- [ ] LV UUID is used as durable identity across renames where needed.
+- [ ] Rollback does not use a more destructive primitive than the forward path.
+- [ ] Slot, volume ID, LV path/name and LV UUID variables are not conflated.
+- [ ] Metadata comes from the authoritative subsystem when practical.
+- [ ] Temporary LV activation preserves the original active/inactive state and does not alter LV permission metadata.
+- [ ] Cross-bus disk option compatibility is validated.
+- [ ] Pause/hotplug behavior preflights controller topology.
+- [ ] Direct config edits never bypass a failed live-device transition.
+- [ ] External utility option combinations have real target-host coverage when safety-relevant.
+- [ ] `--help` works before root/environment preflight and returns 0 with a Usage section.
+- [ ] Any shipped usage snapshot matches live `--help`.
+- [ ] Test/cleanup code uses only explicitly available helpers and fail-closed ownership checks.
 
-## 53. Guiding principle
+## 68. Guiding principle
 
 The v3 style should be readable at three levels:
 

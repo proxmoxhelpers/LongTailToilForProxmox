@@ -1,0 +1,37 @@
+move-disk-to-vm.sh 3.4.4 (project 3.4.7)
+
+USAGE
+  move-disk-to-vm.sh <full-lv-path> <destination-vmid> [pause|stop|restart] [dryrun]
+  move-disk-to-vm.sh <source-vmid> <disk-number|slot> <destination-vmid> [pause|stop|restart] [dryrun]
+
+DESCRIPTION
+  Moves an existing LVM-backed QEMU disk reference to another QEMU VM without
+  copying or renaming the LV. The destination uses its first free SCSI slot.
+
+  The numeric disk form selects a managed backing volume vm-SOURCE-disk-N or base-SOURCE-disk-N; stale embedded IDs are accepted only when the disk number is otherwise unambiguous.
+  An explicit source slot such as scsi0, sata1, virtio2, or unused0 is also
+  accepted.
+
+SOURCE VM STATE
+  default   Hot-swap. Do not stop or pause the source VM.
+  pause     Suspend a running source VM before detach, then resume it.
+            For SCSI disks, pause requires a shared controller with another
+            active SCSI disk; virtio-scsi-single and last-disk controller
+            removal are refused before mutation because Proxmox cannot safely
+            hot-unplug those controllers while the VM is suspended.
+  stop      Stop a running source VM before detach and leave it stopped.
+  restart   Stop a running source VM before detach, then start it again.
+
+  pause, stop, restart, dryrun and --dryrun may appear anywhere. Only one of
+  pause/stop/restart may be selected. A VM that was already stopped is never
+  started automatically.
+
+EXAMPLES
+  move-disk-to-vm.sh /dev/pve/vm-123-disk-0 456 dryrun
+  move-disk-to-vm.sh 123 0 456 pause dryrun
+  move-disk-to-vm.sh restart 123 scsi0 456
+
+Dry-run:
+  Add dryrun or --dryrun anywhere on the command line.
+  Read-only preflight checks still run, but modifying commands are printed
+  instead of executed and mutation-dependent verification is simulated.
