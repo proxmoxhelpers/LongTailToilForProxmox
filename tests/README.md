@@ -1,13 +1,23 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.2.2**  
-Project target: **3.2.2**
+Test suite version: **2.4.0**  
+Project target: **3.3.0**
 
 This suite exercises all 40 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v2.4.0 — v3.3.0 create device-selector/boot coverage
+
+The copy/snapshot integration group now exercises exact source slots, exact destination slots, bare destination bus selectors, and the `boot` keyword. It verifies the resulting attachment slot and confirms the selected slot is first in the destination VM boot order.
+
+The static group also requires all four create helpers to expose `source-slot`, `dest-slot|dest-bus`, `first_free_bus_slot`, and `boot` behavior through their public CLI/runtime.
+
+## v2.2.3 — v3.2.3 empty-target overwrite/add coverage
+
+The copy/snapshot integration group now verifies both overwrite helpers when the requested destination `disk-N` does not already exist. It requires exact disk-number creation, first-free-SCSI attachment, no archive/unused entry, `delete` no-op behavior, and normal data/origin verification.
 
 ## v2.2.2 — v3.2.2 overwrite rollback/identity fix
 

@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.2"
-    TEST_SUITE_VERSION="2.2.2"
+    PROJECT_VERSION="3.3.0"
+    TEST_SUITE_VERSION="2.4.0"
     TEST_GROUP="static-cli"
     test_reset_counters
     test_parse_arguments "$@"
@@ -29,6 +29,8 @@ main() {
     run_case "No prohibited Bash language constructs" test_no_bashisms
     run_case "No set -e unsafe short-circuit die guards" test_no_short_circuit_die
     run_case "Overwrite helpers use UUID-safe rollback" test_overwrite_uuid_safe_rollback
+    run_case "Overwrite helpers support empty destination disk numbers" test_overwrite_empty_target_contract
+    run_case "Create helpers expose device selectors and boot keyword" test_create_device_boot_contract
     run_case "--version for all project commands" test_all_versions
     run_case "--help for all project commands" test_all_help
     run_case "dryrun before --version for all commands" test_all_dryrun_prefix
@@ -144,7 +146,7 @@ test_all_standalone() {
 
         (cd "$tas_dir" && /bin/sh "./$tas_name" --help >/dev/null)
         tas_version="$(cd "$tas_dir" && /bin/sh "./$tas_name" --version)"
-        printf '%s\n' "$tas_version" | grep -F "(project 3.2.2)" >/dev/null || return 1
+        printf '%s\n' "$tas_version" | grep -F "(project 3.3.0)" >/dev/null || return 1
     done
 }
 
@@ -221,11 +223,47 @@ test_overwrite_uuid_safe_rollback() {
     done
 }
 
+# Verifies the two overwrite helpers have an explicit add-new-disk path when
+# DEST_VMID disk-N names no active destination disk.
+test_overwrite_empty_target_contract() {
+    toet_snapshot="$PROJECT_ROOT/create-disk-snapshot-and-overwrite-disk-on-vm.sh"
+    toet_copy="$PROJECT_ROOT/create-disk-copy-and-overwrite-disk-on-vm.sh"
+    for toet_script in "$toet_snapshot" "$toet_copy"; do
+        grep -F 'DEST_EXISTS=0' "$toet_script" >/dev/null || return 1
+        grep -F 'create new disk (nothing to overwrite)' "$toet_script" >/dev/null || return 1
+        grep -F 'first_free_scsi "$DEST_VM"' "$toet_script" >/dev/null || return 1
+        grep -F 'there was no displaced destination disk to delete' "$toet_script" >/dev/null || return 1
+        grep -F 'already exists.' "$toet_script" >/dev/null || return 1
+    done
+
+    grep -F 'test_create_copy_overwrite_empty' "$PROJECT_ROOT/tests/groups/50-copy-snapshot.sh" >/dev/null || return 1
+    grep -F 'test_create_snapshot_overwrite_empty' "$PROJECT_ROOT/tests/groups/50-copy-snapshot.sh" >/dev/null || return 1
+}
+
+
+# Verifies the public create-helper CLI advertises source slots, destination
+# slot/bus selection and the optional boot-order mutation.
+test_create_device_boot_contract() {
+    for tcdbc_name in \
+        create-disk-copy-and-add-to-vm.sh \
+        create-disk-snapshot-and-add-to-vm.sh \
+        create-disk-copy-and-overwrite-disk-on-vm.sh \
+        create-disk-snapshot-and-overwrite-disk-on-vm.sh; do
+        tcdbc_help="$(/bin/sh "$PROJECT_ROOT/$tcdbc_name" --help)"
+        printf '%s\n' "$tcdbc_help" | grep -F 'dest-slot|dest-bus' >/dev/null || { printf '%s does not document destination slot/bus selectors.\n' "$tcdbc_name" >&2; return 1; }
+        printf '%s\n' "$tcdbc_help" | grep -F 'source-slot' >/dev/null || { printf '%s does not document source slot selectors.\n' "$tcdbc_name" >&2; return 1; }
+        printf '%s\n' "$tcdbc_help" | grep -F 'boot' >/dev/null || { printf '%s does not document the boot keyword.\n' "$tcdbc_name" >&2; return 1; }
+        grep -F 'first_free_bus_slot()' "$PROJECT_ROOT/$tcdbc_name" >/dev/null || return 1
+        grep -F 'set_destination_boot_first()' "$PROJECT_ROOT/$tcdbc_name" >/dev/null || return 1
+    done
+    return 0
+}
+
 # Verifies normal version output without exercising command preflight.
 test_all_versions() {
     for tav_script in "$PROJECT_ROOT"/*.sh; do
         tav_output="$(sh "$tav_script" --version)"
-        printf '%s\n' "$tav_output" | grep -F "(project 3.2.2)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
+        printf '%s\n' "$tav_output" | grep -F "(project 3.3.0)" >/dev/null || { printf 'Unexpected version output from %s: %s\n' "$tav_script" "$tav_output" >&2; return 1; }
     done
 }
 

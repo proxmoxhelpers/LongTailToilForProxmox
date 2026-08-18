@@ -407,6 +407,57 @@ normalize_disk_number() (
     printf '%s\n' "$ndn_value"
 )
 
+# disk_slot_limit BUS
+# Prints the highest supported Proxmox QEMU disk index for a bus.
+disk_slot_limit() {
+    case "$1" in
+        ide) printf '%s\n' 3 ;;
+        sata) printf '%s\n' 5 ;;
+        scsi) printf '%s\n' 30 ;;
+        virtio) printf '%s\n' 15 ;;
+        *) return 1 ;;
+    esac
+}
+
+# valid_disk_slot SLOT
+# Returns success only for a supported ideN/sataN/scsiN/virtioN slot.
+valid_disk_slot() (
+    vds_slot="$1"
+    case "$vds_slot" in
+        ide*) vds_bus="ide"; vds_num="${vds_slot#ide}" ;;
+        sata*) vds_bus="sata"; vds_num="${vds_slot#sata}" ;;
+        scsi*) vds_bus="scsi"; vds_num="${vds_slot#scsi}" ;;
+        virtio*) vds_bus="virtio"; vds_num="${vds_slot#virtio}" ;;
+        *) exit 1 ;;
+    esac
+    case "$vds_num" in ''|*[!0-9]*) exit 1 ;; esac
+    vds_max="$(disk_slot_limit "$vds_bus")" || exit 1
+    [ "$vds_num" -le "$vds_max" ]
+)
+
+# first_free_bus_slot VMID BUS
+# Prints the first unused slot on ide/sata/scsi/virtio within Proxmox limits.
+first_free_bus_slot() (
+    ffbs_vm="$1"; ffbs_bus="$2"
+    ffbs_max="$(disk_slot_limit "$ffbs_bus")" || exit 1
+    ffbs_cfg="$(qm config "$ffbs_vm")"; ffbs_i=0
+    while [ "$ffbs_i" -le "$ffbs_max" ]; do
+        printf '%s\n' "$ffbs_cfg" | grep -qE "^${ffbs_bus}${ffbs_i}:" || { printf '%s%s\n' "$ffbs_bus" "$ffbs_i"; exit 0; }
+        ffbs_i=$((ffbs_i + 1))
+    done
+    exit 1
+)
+
+# destination_selector_kind SELECTOR
+# Prints disk, slot, or bus for supported destination selector syntax.
+destination_selector_kind() (
+    dsk_value="$1"
+    if normalize_disk_number "$dsk_value" >/dev/null 2>&1; then printf '%s\n' disk; exit 0; fi
+    case "$dsk_value" in ide|sata|scsi|virtio) printf '%s\n' bus; exit 0 ;; esac
+    valid_disk_slot "$dsk_value" || exit 1
+    printf '%s\n' slot
+)
+
 # resolve_vm_disk_slot VMID SELECTOR
 #
 # Description:
@@ -428,7 +479,14 @@ normalize_disk_number() (
 resolve_vm_disk_slot() {
     rvds_vm="$1"; rvds_selector="$2"
     case "$rvds_selector" in
-        scsi[0-9]*|sata[0-9]*|virtio[0-9]*|ide[0-9]*|unused[0-9]*)
+        scsi[0-9]*|sata[0-9]*|virtio[0-9]*|ide[0-9]*)
+            valid_disk_slot "$rvds_selector" || die "Unsupported QEMU disk slot: $rvds_selector"
+            rvds_value="$(disk_value "$rvds_vm" "$rvds_selector")"
+            [ -n "$rvds_value" ] || die "VM $rvds_vm has no disk at $rvds_selector."
+            printf '%s\n' "$rvds_selector"
+            return 0
+            ;;
+        unused[0-9]*)
             rvds_value="$(disk_value "$rvds_vm" "$rvds_selector")"
             [ -n "$rvds_value" ] || die "VM $rvds_vm has no disk at $rvds_selector."
             printf '%s\n' "$rvds_selector"
@@ -436,7 +494,7 @@ resolve_vm_disk_slot() {
             ;;
     esac
     rvds_num="$(normalize_disk_number "$rvds_selector" 2>/dev/null || :)"
-    [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an explicit QEMU disk slot."
+    [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an exact QEMU disk slot."
     rvds_name="vm-${rvds_vm}-disk-${rvds_num}"
     rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v name="$rvds_name" '
         $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
@@ -582,7 +640,27 @@ restore_source_state() {
 
 # resolve_destination
 # Resolves either full LV path or VMID + disk selector to one active QEMU slot.
+# select_free_destination_disk_number VG
+# Selects the next physically/configuration-free vm-DESTVM-disk-N name.
+select_free_destination_disk_number() {
+    sfdn_vg="$1"
+    sfdn_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "vm-${DEST_VM}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
+    if [ -n "$sfdn_highest" ]; then sfdn_num=$((sfdn_highest + 1)); else sfdn_num=0; fi
+    while :; do
+        sfdn_name="vm-${DEST_VM}-disk-${sfdn_num}"
+        sfdn_busy=0
+        printf '%s\n' "$DEST_CONFIG" | grep -qF "$sfdn_name" && sfdn_busy=1 || :
+        lvs "${sfdn_vg}/${sfdn_name}" >/dev/null 2>&1 && sfdn_busy=1 || :
+        [ "$sfdn_busy" -eq 0 ] && break
+        sfdn_num=$((sfdn_num + 1))
+    done
+    DEST_DISK_NUMBER="$sfdn_num"
+    DEST_OLD_LV="$sfdn_name"
+}
+
 resolve_destination() {
+    DEST_EXISTS=1
+
     if [ "$DEST_FORM" = "path" ]; then
         assert_lv_exists "$DEST_INPUT"
         DEST_OLD_PATH="$(canonical_lv_path "$DEST_INPUT")"
@@ -604,13 +682,69 @@ resolve_destination() {
         [ "$rd_count" -eq 1 ] || { printf '%s\n' "$rd_refs" >&2; die "Destination LV has multiple active QEMU references."; }
         DEST_VM="${rd_refs%%|*}"; rd_rest="${rd_refs#*|}"; DEST_SLOT="${rd_rest%%|*}"; DEST_OLD_VOLID="${rd_rest#*|}"
         require_qemu_vm "$DEST_VM"
+        DEST_CONFIG="$(qm config "$DEST_VM")"
     else
         DEST_VM="$DEST_VM_INPUT"
         require_qemu_vm "$DEST_VM"
-        DEST_SLOT="$(resolve_vm_disk_slot "$DEST_VM" "$DEST_SELECTOR")"
-        case "$DEST_SLOT" in unused*) die "Overwrite destination must be an active disk slot, not $DEST_SLOT." ;; esac
-        DEST_OLD_VALUE="$(disk_value "$DEST_VM" "$DEST_SLOT")"
-        [ -n "$DEST_OLD_VALUE" ] || die "VM $DEST_VM has no disk at $DEST_SLOT."
+        DEST_CONFIG="$(qm config "$DEST_VM")"
+
+        if rd_kind="$(destination_selector_kind "$DEST_SELECTOR" 2>/dev/null)"; then :
+        else die "Destination selector must be N, disk-N, an exact QEMU disk slot, or ide/sata/scsi/virtio."; fi
+
+        case "$rd_kind" in
+            bus)
+                DEST_SLOT="$(first_free_bus_slot "$DEST_VM" "$DEST_SELECTOR")" || die "VM $DEST_VM has no free $DEST_SELECTOR disk slot."
+                DEST_EXISTS=0
+                ;;
+            slot)
+                valid_disk_slot "$DEST_SELECTOR" || die "Unsupported destination disk slot: $DEST_SELECTOR"
+                DEST_SLOT="$DEST_SELECTOR"
+                rd_value="$(disk_value "$DEST_VM" "$DEST_SLOT" 2>/dev/null || :)"
+                if [ -z "$rd_value" ]; then DEST_EXISTS=0; fi
+                ;;
+            disk)
+                rd_num="$(normalize_disk_number "$DEST_SELECTOR")"
+                DEST_DISK_NUMBER="$rd_num"
+                rd_name="vm-${DEST_VM}-disk-${rd_num}"
+                rd_slots="$(printf '%s\n' "$DEST_CONFIG" | awk -F': ' -v name="$rd_name" '
+                    $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
+                        split($2,a,","); v=a[1]; sub(/^[^:]+:/,"",v)
+                        if (v == name) print $1
+                    }')"
+                rd_count="$(printf '%s\n' "$rd_slots" | awk 'NF {n++} END {print n+0}')"
+                if [ "$rd_count" -eq 0 ]; then
+                    DEST_EXISTS=0
+                    DEST_SLOT="$(first_free_scsi "$DEST_VM")" || die "VM $DEST_VM has no free SCSI slot for the new disk."
+                else
+                    [ "$rd_count" -eq 1 ] || { printf '%s\n' "$rd_slots" >&2; die "$rd_name matches multiple VM slots."; }
+                    DEST_SLOT="$(printf '%s\n' "$rd_slots" | awk 'NF {print; exit}')"
+                fi
+                ;;
+        esac
+    fi
+
+    if printf '%s\n' "$DEST_CONFIG" | grep -qE '^lock:[[:space:]]*'; then die "Destination VM $DEST_VM is locked; resolve the lock first."; fi
+    DEST_STATUS="$(qm status "$DEST_VM" 2>/dev/null | awk '{print $2}' || :)"
+
+    if [ "$DEST_EXISTS" -eq 0 ]; then
+        DEST_OPTIONS=""
+        DEST_OLD_VALUE=""
+        DEST_OLD_VOLID=""
+        DEST_OLD_PATH=""
+        DEST_OLD_UUID=""
+        DEST_OLD_STORAGE_ID=""
+        DEST_VG="$SOURCE_VG"
+        DEST_OLD_POOL="$SOURCE_POOL"
+        if [ -z "${DEST_DISK_NUMBER:-}" ]; then select_free_destination_disk_number "$DEST_VG"
+        else DEST_OLD_LV="vm-${DEST_VM}-disk-${DEST_DISK_NUMBER}"; fi
+        return 0
+    fi
+
+    DEST_OLD_VALUE="$(disk_value "$DEST_VM" "$DEST_SLOT")"
+    [ -n "$DEST_OLD_VALUE" ] || die "Destination slot $DEST_SLOT disappeared during preflight."
+    case "$DEST_OLD_VALUE" in *,media=cdrom*) die "Refusing to overwrite CD-ROM/cloud media."; esac
+
+    if [ "$DEST_FORM" = "vm" ]; then
         DEST_OLD_VOLID="${DEST_OLD_VALUE%%,*}"
         rd_path="$(pvesm path "$DEST_OLD_VOLID" 2>/dev/null || :)"
         [ -n "$rd_path" ] || die "Could not resolve destination volume $DEST_OLD_VOLID."
@@ -619,14 +753,8 @@ resolve_destination() {
         DEST_OLD_UUID="$(lvs --noheadings -o lv_uuid "$DEST_OLD_PATH" 2>/dev/null | trim)"
     fi
 
-    DEST_CONFIG="$(qm config "$DEST_VM")"
-    if printf '%s\n' "$DEST_CONFIG" | grep -qE '^lock:[[:space:]]*'; then die "Destination VM $DEST_VM is locked; resolve the lock first."; fi
-    DEST_OLD_VALUE="$(disk_value "$DEST_VM" "$DEST_SLOT")"
-    [ -n "$DEST_OLD_VALUE" ] || die "Destination slot $DEST_SLOT disappeared during preflight."
-    case "$DEST_OLD_VALUE" in *,media=cdrom*) die "Refusing to overwrite CD-ROM/cloud media."; esac
     [ "${DEST_OLD_VALUE%%,*}" = "$DEST_OLD_VOLID" ] || die "Destination slot changed during preflight."
     DEST_OPTIONS="$(printf '%s\n' "$DEST_OLD_VALUE" | awk -F',' '{out=""; for(i=2;i<=NF;i++) if($i !~ /^size=/) out=out "," $i; print out}')"
-    DEST_STATUS="$(qm status "$DEST_VM" 2>/dev/null | awk '{print $2}' || :)"
     DEST_VG="$(lvs --noheadings -o vg_name "$DEST_OLD_PATH" 2>/dev/null | trim)"
     DEST_OLD_LV="$(lvs --noheadings -o lv_name "$DEST_OLD_PATH" 2>/dev/null | trim)"
     DEST_OLD_POOL="$(lvs --noheadings -o pool_lv "$DEST_OLD_PATH" 2>/dev/null | trim)"
@@ -939,19 +1067,57 @@ verify_storage_mapping() {
 }
 
 
+# set_destination_boot_first VMID SLOT
+#
+# Description:
+#   Moves SLOT to the front of the Proxmox boot order when the boot keyword
+#   was requested, preserving the remaining explicit order.
+#
+# Usage:
+#   set_destination_boot_first VMID SLOT
+############################################################
+set_destination_boot_first() {
+    [ "$BOOT_REQUESTED" -eq 1 ] || return 0
+    sdbf_vm="$1"; sdbf_slot="$2"
+    sdbf_boot="$(qm config "$sdbf_vm" | sed -n 's/^boot:[[:space:]]*//p' | head -n1)"
+    sdbf_order="$(printf '%s\n' "$sdbf_boot" | sed -n 's/.*order=\([^,]*\).*/\1/p')"
+    sdbf_new="$sdbf_slot"
+    sdbf_old_ifs="$IFS"; IFS=';'; set -- $sdbf_order; IFS="$sdbf_old_ifs"
+    for sdbf_item in "$@"; do
+        if [ -n "$sdbf_item" ] && [ "$sdbf_item" != "$sdbf_slot" ]; then sdbf_new="${sdbf_new};${sdbf_item}"; fi
+    done
+    info "Making $sdbf_slot the first boot device on VM $sdbf_vm..."
+    dryrun_cmd qm set "$sdbf_vm" --boot "order=$sdbf_new"
+    if dryrun_enabled; then
+        dryrun_verify "VM $sdbf_vm boot order would start with $sdbf_slot"
+    else
+        qm config "$sdbf_vm" | grep -qE "^boot:.*order=${sdbf_slot}([;,]|$)" || die "Boot-order verification failed."
+    fi
+    BOOT_ORDER_APPLIED=1
+}
+
+# verify_destination_boot_first VMID SLOT
+# Verifies the boot keyword postcondition.
+verify_destination_boot_first() {
+    [ "$BOOT_REQUESTED" -eq 1 ] || return 0
+    if dryrun_enabled; then dryrun_verify "VM $1 boot order would start with $2"; return 0; fi
+    qm config "$1" | grep -qE "^boot:.*order=${2}([;,]|$)" || die "Requested boot slot is not first in the boot order."
+}
+
 ############################################################
 # SETUP / MAIN / END
 ############################################################
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.2"; SCRIPT_VERSION="3.2.2"
+    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.3.0"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
     SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
     DEST_FORM=""; DEST_INPUT=""; DEST_VM_INPUT=""; DEST_SELECTOR=""
-    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""; NEW_UUID=""; ROLLBACK_FAILED=0
+    BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
+    CREATED=0; OLD_DETACHED=0; OLD_ARCHIVED=0; REPLACEMENT_FINALIZED=0; NEW_ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0; DELETE_OLD=0; OLD_DELETED=0; OLD_UNUSED_KEY=""; NEW_UUID=""; ROLLBACK_FAILED=0; DEST_EXISTS=1
     parse_arguments "$@"
     check_elevation
 }
@@ -971,6 +1137,7 @@ main() {
     verify_storage_mapping
     apply_destination_state
     replace_destination_disk
+    set_destination_boot_first "$DEST_VM" "$DEST_SLOT"
     restore_destination_state
     delete_archived_disk
     verify_result
@@ -979,14 +1146,19 @@ main() {
 }
 
 end() {
-    print_banner "Destination disk overwritten with linked snapshot"
+    if [ "$DEST_EXISTS" -eq 1 ]; then print_banner "Destination disk overwritten with linked snapshot"
+    else print_banner "Destination disk created with linked snapshot"; fi
     printf 'Source:          %s\n' "$SOURCE_PATH"
     printf 'Destination VM:  %s\n' "$DEST_VM"
-    printf 'Replaced slot:   %s\n' "$DEST_SLOT"
+    printf 'Destination slot: %s\n' "$DEST_SLOT"
     printf 'Disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
-    printf 'Snapshot:      %s\n' "$FINAL_VOLID"
-    if [ "$DELETE_OLD" -eq 1 ]; then printf 'Old volume:      %s (deleted after successful replacement)\n' "$DEST_OLD_VOLID"
-    else printf 'Old volume:      %s -> %s (preserved as unusedN)\n' "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; fi
+    printf 'Snapshot:        %s\n' "$FINAL_VOLID"
+    if [ "$DEST_EXISTS" -eq 1 ]; then
+        if [ "$DELETE_OLD" -eq 1 ]; then printf 'Old volume:      %s (deleted after successful replacement)\n' "$DEST_OLD_VOLID"
+        else printf 'Old volume:      %s -> %s (preserved as unusedN)\n' "$DEST_OLD_VOLID" "$ARCHIVE_VOLID"; fi
+    else
+        printf 'Old volume:      none\n'
+    fi
     printf 'State mode:      %s\n\n' "$MODE"
     dryrun_summary
 }
@@ -1000,37 +1172,52 @@ usage() {
 $(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
 
 USAGE
-  $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [dryrun]
-  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|slot> [hot|pause|stop|restart] [delete] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|slot> <dest-vmid> <dest-disk-N|slot> [hot|pause|stop|restart] [delete] [dryrun]
+  $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
 
 DESCRIPTION
-  Creates an LVM-thin snapshot of the source, then replaces the
-  destination VM disk while retaining the destination's original backing disk
-  number (vm-DESTVMID-disk-N).
+  Creates an LVM-thin snapshot from the source and places it on the requested destination
+  VM. Existing destination disks are replaced transactionally; empty exact/bus
+  destinations create a new disk.
 
-  The old destination LV is first renamed to vm-DESTVMID-disk-901, or the next
-  free number above 900, so the original disk-N becomes available. By default
-  that renamed disk remains recoverable as unusedN.
+SOURCE SELECTORS
+  <source-lv-path>      Full LVM path.
+  <source-vmid> disk-N  Resolve a standard backing volume.
+  <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
 
-  Add the keyword "delete" anywhere on the command line to permanently delete
-  the renamed old disk after the replacement is attached, verified, and the
-  requested VM-state restoration succeeds.
+DESTINATION SELECTORS
+  disk-N       Target that backing disk number. If absent, create it on first free SCSI.
+  sata0        Use exactly sata0; replace it if occupied, create there if empty.
+  ide2         Use exactly ide2.
+  scsi4        Use exactly scsi4.
+  virtio0      Use exactly virtio0.
+  sata         Use the first free SATA slot and choose a free backing disk number.
+  ide          Use the first free IDE slot and choose a free backing disk number.
+  scsi         Use the first free SCSI slot and choose a free backing disk number.
+  virtio       Use the first free VirtIO slot and choose a free backing disk number.
 
 DESTINATION VM STATE
-  default   Hot-swap: replace the disk without pausing/stopping the VM.
-  pause     Pause a running destination VM before replacing the disk, then resume.
-  stop      Stop a running destination VM before replacement and leave it stopped.
-  restart   Stop a running destination VM, replace the disk, then start it.
+  default/hot  Replace/add without pausing or stopping the destination VM.
+  pause        Pause a running destination VM during replacement, then resume.
+  stop         Stop a running destination VM and leave it stopped.
+  restart      Stop a running destination VM, change the disk, then start it.
 
-  The state keyword applies to the destination VM because it is the VM losing
-  the existing disk. The source VM is not automatically quiesced.
+OPTIONAL KEYWORDS
+  delete       Permanently remove the displaced old disk after successful verification.
+               Has no effect when the selected destination slot/disk was empty.
+  boot         Make the actual destination slot first in the VM boot order.
+  dryrun       Perform real read-only preflight and print mutations without executing them.
+
+  hot, pause, stop, restart, delete, boot, dryrun and --dryrun may appear anywhere.
 
 EXAMPLES
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 disk-1 dryrun
-  $(basename "$0") 123 disk-0 456 disk-1 pause dryrun
-  $(basename "$0") delete /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 restart dryrun
+  $(basename "$0") 123 sata0 456 sata0 boot dryrun
+  $(basename "$0") 123 disk-0 456 virtio delete restart boot dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 scsi4 pause dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 delete dryrun
 
 EOF
     dryrun_help
@@ -1042,6 +1229,7 @@ parse_arguments() {
             dryrun|--dryrun) enable_dryrun ;;
             hot|pause|stop|restart) set_state_mode "$1" ;;
             delete) DELETE_OLD=1 ;;
+            boot) BOOT_REQUESTED=1 ;;
             -h|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
@@ -1101,7 +1289,12 @@ select_new_disk_name() {
     FINAL_VOLID="${STORAGE_ID}:${FINAL_LV_NAME}"
 
     snd_existing_uuid="$(lvs --noheadings -o lv_uuid "${NEW_VG}/${FINAL_LV_NAME}" 2>/dev/null | trim || :)"
-    [ -z "$snd_existing_uuid" ] || [ "$snd_existing_uuid" = "$DEST_OLD_UUID" ] || die "Replacement name already exists on another LV: ${NEW_VG}/${FINAL_LV_NAME}"
+    if [ "$DEST_EXISTS" -eq 1 ]; then
+        [ -z "$snd_existing_uuid" ] || [ "$snd_existing_uuid" = "$DEST_OLD_UUID" ] || die "Replacement name already exists on another LV: ${NEW_VG}/${FINAL_LV_NAME}"
+    else
+        [ -z "$snd_existing_uuid" ] || die "Cannot create disk-$DEST_DISK_NUMBER: ${NEW_VG}/${FINAL_LV_NAME} already exists."
+        if guest_volume_references | grep -F "|$FINAL_VOLID" >/dev/null 2>&1; then die "Cannot create disk-$DEST_DISK_NUMBER: $FINAL_VOLID is already referenced by a guest configuration."; fi
+    fi
 
     snd_highest="$(printf '%s\n' "$DEST_CONFIG" | grep -oE "vm-${DEST_VM}-disk-[0-9]+" | sed -E 's/.*-disk-([0-9]+)$/\1/' | sort -n | tail -n1 || :)"
     if [ -n "$snd_highest" ]; then TEMP_DISK_NUMBER=$((snd_highest + 1)); else TEMP_DISK_NUMBER=0; fi
@@ -1113,12 +1306,14 @@ select_new_disk_name() {
         snd_busy=0
         printf '%s\n' "$DEST_CONFIG" | grep -qF "$TEMP_LV_NAME" && snd_busy=1 || :
         lvs "${NEW_VG}/${TEMP_LV_NAME}" >/dev/null 2>&1 && snd_busy=1 || :
+        guest_volume_references | grep -F "|${TEMP_VOLID}" >/dev/null 2>&1 && snd_busy=1 || :
         [ "$snd_busy" -eq 0 ] && break
         TEMP_DISK_NUMBER=$((TEMP_DISK_NUMBER + 1))
     done
 
     NEW_LV_NAME="$TEMP_LV_NAME"; NEW_LV_PATH="$TEMP_LV_PATH"; NEW_VOLID="$TEMP_VOLID"
-    select_archive_name
+    if [ "$DEST_EXISTS" -eq 1 ]; then select_archive_name
+    else ARCHIVE_LV_NAME=""; ARCHIVE_LV_PATH=""; ARCHIVE_VOLID=""; ARCHIVE_DISK_NUMBER=""; fi
 }
 
 ############################################################
@@ -1126,7 +1321,7 @@ select_new_disk_name() {
 ############################################################
 
 print_plan() {
-    print_banner "Overwrite VM disk with linked snapshot"
+    print_banner "Overwrite/add VM disk with linked snapshot"
     printf 'Source LV:              %s\n' "$SOURCE_PATH"
     [ -z "$SOURCE_VM" ] || printf 'Source VM:              %s%s\n' "$SOURCE_VM" "${SOURCE_SLOT:+ ($SOURCE_SLOT)}"
     printf 'Source thin pool:       %s/%s\n' "$SOURCE_VG" "$SOURCE_POOL"
@@ -1134,19 +1329,60 @@ print_plan() {
     printf 'Destination VM:         %s\n' "$DEST_VM"
     printf 'Destination VM status:  %s\n' "${DEST_STATUS:-unknown}"
     printf 'Destination state mode: %s\n' "$MODE"
-    printf 'Replace slot:           %s\n' "$DEST_SLOT"
+    printf 'Destination slot:       %s\n' "$DEST_SLOT"
     printf 'Target disk number:     disk-%s\n' "$DEST_DISK_NUMBER"
-    printf 'Old volume:             %s\n' "$DEST_OLD_VOLID"
-    printf 'Old disk archive:       %s\n' "$ARCHIVE_VOLID"
+
+    if [ "$DEST_EXISTS" -eq 1 ]; then
+        printf 'Old volume:             %s\n' "$DEST_OLD_VOLID"
+        printf 'Old disk archive:       %s\n' "$ARCHIVE_VOLID"
+        printf 'Operation:               replace existing disk\n'
+    else
+        printf 'Old volume:             none\n'
+        printf 'Operation:               create new disk (nothing to overwrite)\n'
+    fi
+
     printf 'Staged snapshot:        %s\n' "$TEMP_VOLID"
-    printf 'Final snapshot:         %s\n\n' "$FINAL_VOLID"
-    if [ "$DELETE_OLD" -eq 1 ]; then warn "delete requested: the archived old disk will be permanently removed only after the replacement is attached and verified."
-    else warn "The displaced destination volume will be renamed to disk-$ARCHIVE_DISK_NUMBER and preserved as unusedN."; fi
+    printf 'Final snapshot:         %s\n' "$FINAL_VOLID"
+    printf 'First boot device:      %s\n\n' "$([ "$BOOT_REQUESTED" -eq 1 ] && printf '%s' "$DEST_SLOT" || printf '%s' unchanged)"
+
+    if [ "$DEST_EXISTS" -eq 1 ]; then
+        if [ "$DELETE_OLD" -eq 1 ]; then warn "delete requested: the archived old disk will be permanently removed only after the replacement is attached and verified."
+        else warn "The displaced destination volume will be renamed to disk-$ARCHIVE_DISK_NUMBER and preserved as unusedN."; fi
+    elif [ "$DELETE_OLD" -eq 1 ]; then
+        info "delete requested, but there is no existing destination disk to delete."
+    fi
 }
 
 # replace_destination_disk
 # Detaches the old disk into unusedN, then attaches the snapshot at the exact slot.
 replace_destination_disk() {
+    if [ "$DEST_EXISTS" -eq 0 ]; then
+        rdd_now="$(disk_value "$DEST_VM" "$DEST_SLOT" 2>/dev/null || :)"
+        [ -z "$rdd_now" ] || die "Destination slot $DEST_SLOT became occupied after preflight; refusing to attach the new disk."
+
+        info "No existing disk uses disk-$DEST_DISK_NUMBER; creating it as a new destination disk."
+        info "Renaming staged snapshot to disk-$DEST_DISK_NUMBER..."
+        if dryrun_enabled; then dryrun_cmd lvrename "$NEW_VG" "$TEMP_LV_NAME" "$FINAL_LV_NAME"
+        else run_lvm_filtered lvrename "$NEW_VG" "$TEMP_LV_NAME" "$FINAL_LV_NAME"; fi
+        REPLACEMENT_FINALIZED=1
+        NEW_LV_NAME="$FINAL_LV_NAME"; NEW_LV_PATH="$FINAL_LV_PATH"; NEW_VOLID="$FINAL_VOLID"
+
+        if ! dryrun_enabled; then
+            rdd_final_uuid="$(lvs --noheadings -o lv_uuid "${NEW_VG}/${FINAL_LV_NAME}" 2>/dev/null | trim || :)"
+            [ "$rdd_final_uuid" = "$NEW_UUID" ] || die "New snapshot UUID changed or final rename did not land on the intended LV."
+        fi
+
+        verify_storage_mapping
+
+        info "Attaching snapshot $NEW_VOLID at $DEST_SLOT..."
+        if ! dryrun_cmd qm set "$DEST_VM" "--${DEST_SLOT}" "$NEW_VOLID"; then
+            if ! dryrun_enabled && qm config "$DEST_VM" 2>/dev/null | grep -qF "$NEW_VOLID"; then NEW_ATTACHED=1; fi
+            die "Could not attach the new snapshot disk."
+        fi
+        NEW_ATTACHED=1
+        return 0
+    fi
+
     rdd_now="$(disk_value "$DEST_VM" "$DEST_SLOT")"
     [ "$rdd_now" = "$DEST_OLD_VALUE" ] || die "Destination slot changed after preflight; refusing to replace it."
 
@@ -1201,6 +1437,11 @@ replace_destination_disk() {
 
 delete_archived_disk() {
     [ "$DELETE_OLD" -eq 1 ] || return 0
+    if [ "$DEST_EXISTS" -eq 0 ]; then
+        info "delete requested, but there was no displaced destination disk to delete."
+        return 0
+    fi
+
     info "Deleting displaced archived disk $ARCHIVE_VOLID..."
 
     if dryrun_enabled; then
@@ -1237,25 +1478,34 @@ delete_archived_disk() {
 
 verify_result() {
     if dryrun_enabled; then
-        dryrun_verify "$DEST_SLOT would reference $FINAL_VOLID using the original disk number disk-$DEST_DISK_NUMBER"
-        if [ "$DELETE_OLD" -eq 1 ]; then dryrun_verify "$ARCHIVE_VOLID would be deleted"
-        else dryrun_verify "$ARCHIVE_VOLID would remain preserved as unusedN"; fi
+        if [ "$DEST_EXISTS" -eq 1 ]; then
+            dryrun_verify "$DEST_SLOT would reference $FINAL_VOLID using the original disk number disk-$DEST_DISK_NUMBER"
+            if [ "$DELETE_OLD" -eq 1 ]; then dryrun_verify "$ARCHIVE_VOLID would be deleted"
+            else dryrun_verify "$ARCHIVE_VOLID would remain preserved as unusedN"; fi
+        else
+            dryrun_verify "$DEST_SLOT would reference newly created $FINAL_VOLID as disk-$DEST_DISK_NUMBER"
+        fi
         dryrun_verify "Snapshot origin would remain $SOURCE_LV"
         dryrun_verify "Destination VM state would match requested $MODE behavior"
         return 0
     fi
 
-    [ "$(disk_volid "$DEST_VM" "$DEST_SLOT")" = "$FINAL_VOLID" ] || die "Replacement slot verification failed."
-    [ "$NEW_LV_NAME" = "vm-${DEST_VM}-disk-${DEST_DISK_NUMBER}" ] || die "Replacement did not retain the original destination disk number."
-    if [ "$DELETE_OLD" -eq 1 ]; then
-        [ "$OLD_DELETED" -eq 1 ] || die "Delete was requested, but the displaced disk was not deleted."
-        [ -z "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Deleted archived disk still has an unused reference."
-    else
-        [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Archived destination volume is not preserved as unusedN."
-        lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1 || die "Archived destination LV is missing."
+    [ "$(disk_volid "$DEST_VM" "$DEST_SLOT")" = "$FINAL_VOLID" ] || die "Destination slot verification failed."
+    [ "$NEW_LV_NAME" = "vm-${DEST_VM}-disk-${DEST_DISK_NUMBER}" ] || die "Result did not retain the requested destination disk number."
+
+    if [ "$DEST_EXISTS" -eq 1 ]; then
+        if [ "$DELETE_OLD" -eq 1 ]; then
+            [ "$OLD_DELETED" -eq 1 ] || die "Delete was requested, but the displaced disk was not deleted."
+            [ -z "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Deleted archived disk still has an unused reference."
+        else
+            [ -n "$(old_unused_key "$ARCHIVE_VOLID")" ] || die "Archived destination volume is not preserved as unusedN."
+            lvs "${DEST_VG}/${ARCHIVE_LV_NAME}" >/dev/null 2>&1 || die "Archived destination LV is missing."
+        fi
     fi
+
     vr_origin="$(lvs --noheadings -o origin "${NEW_VG}/${NEW_LV_NAME}" | trim)"
     [ "$vr_origin" = "$SOURCE_LV" ] || die "Snapshot origin verification failed."
+    verify_destination_boot_first "$DEST_VM" "$DEST_SLOT"
 }
 
 ############################################################

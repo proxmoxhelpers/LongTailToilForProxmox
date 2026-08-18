@@ -143,6 +143,57 @@ first_free_scsi() (
     exit 1
 )
 
+# disk_slot_limit BUS
+# Prints the highest supported Proxmox QEMU disk index for a bus.
+disk_slot_limit() {
+    case "$1" in
+        ide) printf '%s\n' 3 ;;
+        sata) printf '%s\n' 5 ;;
+        scsi) printf '%s\n' 30 ;;
+        virtio) printf '%s\n' 15 ;;
+        *) return 1 ;;
+    esac
+}
+
+# valid_disk_slot SLOT
+# Returns success only for a supported ideN/sataN/scsiN/virtioN slot.
+valid_disk_slot() (
+    vds_slot="$1"
+    case "$vds_slot" in
+        ide*) vds_bus="ide"; vds_num="${vds_slot#ide}" ;;
+        sata*) vds_bus="sata"; vds_num="${vds_slot#sata}" ;;
+        scsi*) vds_bus="scsi"; vds_num="${vds_slot#scsi}" ;;
+        virtio*) vds_bus="virtio"; vds_num="${vds_slot#virtio}" ;;
+        *) exit 1 ;;
+    esac
+    case "$vds_num" in ''|*[!0-9]*) exit 1 ;; esac
+    vds_max="$(disk_slot_limit "$vds_bus")" || exit 1
+    [ "$vds_num" -le "$vds_max" ]
+)
+
+# first_free_bus_slot VMID BUS
+# Prints the first unused slot on ide/sata/scsi/virtio within Proxmox limits.
+first_free_bus_slot() (
+    ffbs_vm="$1"; ffbs_bus="$2"
+    ffbs_max="$(disk_slot_limit "$ffbs_bus")" || exit 1
+    ffbs_cfg="$(qm config "$ffbs_vm")"; ffbs_i=0
+    while [ "$ffbs_i" -le "$ffbs_max" ]; do
+        printf '%s\n' "$ffbs_cfg" | grep -qE "^${ffbs_bus}${ffbs_i}:" || { printf '%s%s\n' "$ffbs_bus" "$ffbs_i"; exit 0; }
+        ffbs_i=$((ffbs_i + 1))
+    done
+    exit 1
+)
+
+# destination_selector_kind SELECTOR
+# Prints disk, slot, or bus for supported destination selector syntax.
+destination_selector_kind() (
+    dsk_value="$1"
+    if normalize_disk_number "$dsk_value" >/dev/null 2>&1; then printf '%s\n' disk; exit 0; fi
+    case "$dsk_value" in ide|sata|scsi|virtio) printf '%s\n' bus; exit 0 ;; esac
+    valid_disk_slot "$dsk_value" || exit 1
+    printf '%s\n' slot
+)
+
 # first_free_unused VMID
 # Prints the first unused unused0..unused255 key.
 first_free_unused() (

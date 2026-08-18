@@ -407,6 +407,57 @@ normalize_disk_number() (
     printf '%s\n' "$ndn_value"
 )
 
+# disk_slot_limit BUS
+# Prints the highest supported Proxmox QEMU disk index for a bus.
+disk_slot_limit() {
+    case "$1" in
+        ide) printf '%s\n' 3 ;;
+        sata) printf '%s\n' 5 ;;
+        scsi) printf '%s\n' 30 ;;
+        virtio) printf '%s\n' 15 ;;
+        *) return 1 ;;
+    esac
+}
+
+# valid_disk_slot SLOT
+# Returns success only for a supported ideN/sataN/scsiN/virtioN slot.
+valid_disk_slot() (
+    vds_slot="$1"
+    case "$vds_slot" in
+        ide*) vds_bus="ide"; vds_num="${vds_slot#ide}" ;;
+        sata*) vds_bus="sata"; vds_num="${vds_slot#sata}" ;;
+        scsi*) vds_bus="scsi"; vds_num="${vds_slot#scsi}" ;;
+        virtio*) vds_bus="virtio"; vds_num="${vds_slot#virtio}" ;;
+        *) exit 1 ;;
+    esac
+    case "$vds_num" in ''|*[!0-9]*) exit 1 ;; esac
+    vds_max="$(disk_slot_limit "$vds_bus")" || exit 1
+    [ "$vds_num" -le "$vds_max" ]
+)
+
+# first_free_bus_slot VMID BUS
+# Prints the first unused slot on ide/sata/scsi/virtio within Proxmox limits.
+first_free_bus_slot() (
+    ffbs_vm="$1"; ffbs_bus="$2"
+    ffbs_max="$(disk_slot_limit "$ffbs_bus")" || exit 1
+    ffbs_cfg="$(qm config "$ffbs_vm")"; ffbs_i=0
+    while [ "$ffbs_i" -le "$ffbs_max" ]; do
+        printf '%s\n' "$ffbs_cfg" | grep -qE "^${ffbs_bus}${ffbs_i}:" || { printf '%s%s\n' "$ffbs_bus" "$ffbs_i"; exit 0; }
+        ffbs_i=$((ffbs_i + 1))
+    done
+    exit 1
+)
+
+# destination_selector_kind SELECTOR
+# Prints disk, slot, or bus for supported destination selector syntax.
+destination_selector_kind() (
+    dsk_value="$1"
+    if normalize_disk_number "$dsk_value" >/dev/null 2>&1; then printf '%s\n' disk; exit 0; fi
+    case "$dsk_value" in ide|sata|scsi|virtio) printf '%s\n' bus; exit 0 ;; esac
+    valid_disk_slot "$dsk_value" || exit 1
+    printf '%s\n' slot
+)
+
 # resolve_vm_disk_slot VMID SELECTOR
 #
 # Description:
@@ -428,7 +479,14 @@ normalize_disk_number() (
 resolve_vm_disk_slot() {
     rvds_vm="$1"; rvds_selector="$2"
     case "$rvds_selector" in
-        scsi[0-9]*|sata[0-9]*|virtio[0-9]*|ide[0-9]*|unused[0-9]*)
+        scsi[0-9]*|sata[0-9]*|virtio[0-9]*|ide[0-9]*)
+            valid_disk_slot "$rvds_selector" || die "Unsupported QEMU disk slot: $rvds_selector"
+            rvds_value="$(disk_value "$rvds_vm" "$rvds_selector")"
+            [ -n "$rvds_value" ] || die "VM $rvds_vm has no disk at $rvds_selector."
+            printf '%s\n' "$rvds_selector"
+            return 0
+            ;;
+        unused[0-9]*)
             rvds_value="$(disk_value "$rvds_vm" "$rvds_selector")"
             [ -n "$rvds_value" ] || die "VM $rvds_vm has no disk at $rvds_selector."
             printf '%s\n' "$rvds_selector"
@@ -436,7 +494,7 @@ resolve_vm_disk_slot() {
             ;;
     esac
     rvds_num="$(normalize_disk_number "$rvds_selector" 2>/dev/null || :)"
-    [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an explicit QEMU disk slot."
+    [ -n "$rvds_num" ] || die "Disk selector must be N, disk-N, or an exact QEMU disk slot."
     rvds_name="vm-${rvds_vm}-disk-${rvds_num}"
     rvds_slots="$(qm config "$rvds_vm" | awk -F': ' -v name="$rvds_name" '
         $1 ~ /^(scsi|sata|virtio|ide|unused)[0-9]+$/ {
@@ -656,18 +714,56 @@ verify_copy() {
 }
 
 
+# set_destination_boot_first VMID SLOT
+#
+# Description:
+#   Moves SLOT to the front of the Proxmox boot order when the boot keyword
+#   was requested, preserving the remaining explicit order.
+#
+# Usage:
+#   set_destination_boot_first VMID SLOT
+############################################################
+set_destination_boot_first() {
+    [ "$BOOT_REQUESTED" -eq 1 ] || return 0
+    sdbf_vm="$1"; sdbf_slot="$2"
+    sdbf_boot="$(qm config "$sdbf_vm" | sed -n 's/^boot:[[:space:]]*//p' | head -n1)"
+    sdbf_order="$(printf '%s\n' "$sdbf_boot" | sed -n 's/.*order=\([^,]*\).*/\1/p')"
+    sdbf_new="$sdbf_slot"
+    sdbf_old_ifs="$IFS"; IFS=';'; set -- $sdbf_order; IFS="$sdbf_old_ifs"
+    for sdbf_item in "$@"; do
+        if [ -n "$sdbf_item" ] && [ "$sdbf_item" != "$sdbf_slot" ]; then sdbf_new="${sdbf_new};${sdbf_item}"; fi
+    done
+    info "Making $sdbf_slot the first boot device on VM $sdbf_vm..."
+    dryrun_cmd qm set "$sdbf_vm" --boot "order=$sdbf_new"
+    if dryrun_enabled; then
+        dryrun_verify "VM $sdbf_vm boot order would start with $sdbf_slot"
+    else
+        qm config "$sdbf_vm" | grep -qE "^boot:.*order=${sdbf_slot}([;,]|$)" || die "Boot-order verification failed."
+    fi
+    BOOT_ORDER_APPLIED=1
+}
+
+# verify_destination_boot_first VMID SLOT
+# Verifies the boot keyword postcondition.
+verify_destination_boot_first() {
+    [ "$BOOT_REQUESTED" -eq 1 ] || return 0
+    if dryrun_enabled; then dryrun_verify "VM $1 boot order would start with $2"; return 0; fi
+    qm config "$1" | grep -qE "^boot:.*order=${2}([;,]|$)" || die "Requested boot slot is not first in the boot order."
+}
+
 ############################################################
 # SETUP / MAIN / END
 ############################################################
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.2.2"; SCRIPT_VERSION="3.2.2"
+    PROJECT_VERSION="3.3.0"; SCRIPT_VERSION="3.3.0"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
     SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_ACTIVE=0; SOURCE_STATUS=""
-    REQUESTED_DEST_DISK=""; REQUESTED_DEST_VG=""
+    REQUESTED_DEST_DISK=""; REQUESTED_DEST_SLOT_SELECTOR=""; REQUESTED_DEST_VG=""
+    BOOT_REQUESTED=0; BOOT_ORDER_APPLIED=0
     CREATED=0; ATTACHED=0; COMPLETE=0; PAUSED_BY_US=0; STOPPED_BY_US=0
     parse_arguments "$@"
     check_elevation
@@ -678,11 +774,11 @@ main() {
     need_commands lvs vgs lvcreate lvremove qm pvesm blockdev readlink awk grep sed dd cmp sort tail find
     resolve_source
     validate_destination_vm
+    resolve_destination_attachment
     DEST_VG="${REQUESTED_DEST_VG:-$SOURCE_VG}"
     vgs "$DEST_VG" >/dev/null 2>&1 || die "Destination volume group does not exist: $DEST_VG"
     select_destination_storage
     select_disk_name
-    SCSI_DEVICE="$(first_free_scsi "$DEST_VMID")" || die "No free SCSI disk slot is available on VM $DEST_VMID."
     TARGET_STATUS="$(qm status "$DEST_VMID" 2>/dev/null | awk '{print $2}' || :)"
     print_plan
     install_transaction_traps
@@ -692,6 +788,7 @@ main() {
     copy_data
     verify_copy
     attach_copy
+    set_destination_boot_first "$DEST_VMID" "$SCSI_DEVICE"
     restore_source_state
     verify_result
     COMPLETE=1
@@ -720,33 +817,55 @@ usage() {
 $(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
 
 USAGE
-  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N] [dest-vg] [hot|pause|stop|restart] [dryrun]
-  $(basename "$0") <source-vmid> <disk-N|slot> <dest-vmid> [dest-disk-N] [dest-vg] [hot|pause|stop|restart] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
 
 DESCRIPTION
   Creates a full independent copy of an LVM-backed source disk and attaches it
-  to the first free SCSI slot on a destination QEMU VM.
+  to a destination QEMU VM.
 
-  The source may be a full LV path or a VMID plus backing disk number/slot.
-  The optional destination disk number controls the new backing name
-  vm-DESTVMID-disk-N. If omitted, the next free backing number is selected.
+SOURCE SELECTORS
+  <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0.
+  <source-vmid> disk-N  Resolve a standard backing volume name.
+  <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  Exact source slots must already exist and must be storage-backed disks.
+
+DESTINATION SELECTORS
+  omitted      Attach to the first free SCSI slot; choose the next free disk-N.
+  disk-N       Use that backing disk number; attach to the first free SCSI slot.
+  sata0        Attach specifically at sata0; choose the next free backing disk-N.
+  ide2         Attach specifically at ide2.
+  scsi4        Attach specifically at scsi4.
+  virtio0      Attach specifically at virtio0.
+  sata         Attach to the first free SATA slot.
+  ide          Attach to the first free IDE slot.
+  scsi         Attach to the first free SCSI slot.
+  virtio       Attach to the first free VirtIO slot.
+
+  Exact destination slots must be empty. Use an overwrite helper when the
+  selected slot is already occupied.
 
 SOURCE VM STATE
-  default   Hot mode; do not pause or stop the source VM.
-  pause     Pause a running source VM while the copy is created and verified.
-  stop      Stop a running source VM and leave it stopped.
-  restart   Stop a running source VM, create/verify/attach the copy, then start it.
+  default/hot  Do not pause or stop the source VM.
+  pause        Pause a running source VM while the copy is created and verified.
+  stop         Stop a running source VM and leave it stopped.
+  restart      Stop a running source VM, create/verify/attach the copy, then start it.
 
-  pause, stop, restart, dryrun and --dryrun may appear anywhere.
+OPTIONAL KEYWORDS
+  boot         Make the actual destination slot the first device in VM boot order.
+  dryrun       Perform real read-only preflight and print mutations without executing them.
+
+  hot, pause, stop, restart, boot, dryrun and --dryrun may appear anywhere.
 
 BACKWARD COMPATIBILITY
-  In the full-path form, a nonnumeric third positional value is still treated
+  In the full-path form, a non-selector third positional value is still treated
   as destination-vg, matching the previous interface.
 
 EXAMPLES
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 dryrun
-  $(basename "$0") /dev/pve/vm-123-disk-0 456 disk-3 fastvg pause dryrun
-  $(basename "$0") 123 disk-0 456 disk-3 restart dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 sata boot dryrun
+  $(basename "$0") 123 sata0 456 virtio0 restart boot dryrun
+  $(basename "$0") 123 disk-0 456 disk-3 fastvg pause dryrun
+  $(basename "$0") /dev/pve/vm-123-disk-0 456 fastvg dryrun
 
 EOF
     dryrun_help
@@ -757,6 +876,7 @@ parse_arguments() {
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
             hot|pause|stop|restart) set_state_mode "$1" ;;
+            boot) BOOT_REQUESTED=1 ;;
             -h|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
@@ -775,12 +895,13 @@ parse_arguments() {
             [ "$ARG_COUNT" -ge 2 ] && [ "$ARG_COUNT" -le 4 ] || { usage >&2; exit 2; }
             SOURCE_FORM="path"; SOURCE_INPUT="$ARG1"; DEST_VMID="$ARG2"
             if [ "$ARG_COUNT" -ge 3 ]; then
-                pa_num="$(normalize_disk_number "$ARG3" 2>/dev/null || :)"
-                if [ -n "$pa_num" ]; then REQUESTED_DEST_DISK="$pa_num"
-                else REQUESTED_DEST_VG="$ARG3"; fi
+                if ! assign_destination_selector "$ARG3"; then
+                    case "$ARG3" in ide*|sata*|scsi*|virtio*) die "Invalid destination slot/bus selector: $ARG3" ;; esac
+                    REQUESTED_DEST_VG="$ARG3"
+                fi
             fi
             if [ "$ARG_COUNT" -eq 4 ]; then
-                [ -n "$REQUESTED_DEST_DISK" ] || die "When four positional arguments are used, the third must be dest-disk-N and the fourth destination-vg."
+                [ -n "$REQUESTED_DEST_DISK$REQUESTED_DEST_SLOT_SELECTOR" ] || die "When four positional arguments are used, the third must be a destination selector and the fourth destination-vg."
                 REQUESTED_DEST_VG="$ARG4"
             fi
             ;;
@@ -788,12 +909,13 @@ parse_arguments() {
             [ "$ARG_COUNT" -ge 3 ] && [ "$ARG_COUNT" -le 5 ] || { usage >&2; exit 2; }
             SOURCE_FORM="vm"; SOURCE_VM_INPUT="$ARG1"; SOURCE_SELECTOR="$ARG2"; DEST_VMID="$ARG3"
             if [ "$ARG_COUNT" -ge 4 ]; then
-                pa_num="$(normalize_disk_number "$ARG4" 2>/dev/null || :)"
-                if [ -n "$pa_num" ]; then REQUESTED_DEST_DISK="$pa_num"
-                else REQUESTED_DEST_VG="$ARG4"; fi
+                if ! assign_destination_selector "$ARG4"; then
+                    case "$ARG4" in ide*|sata*|scsi*|virtio*) die "Invalid destination slot/bus selector: $ARG4" ;; esac
+                    REQUESTED_DEST_VG="$ARG4"
+                fi
             fi
             if [ "$ARG_COUNT" -eq 5 ]; then
-                [ -n "$REQUESTED_DEST_DISK" ] || die "When five positional arguments are used, the fourth must be dest-disk-N and the fifth destination-vg."
+                [ -n "$REQUESTED_DEST_DISK$REQUESTED_DEST_SLOT_SELECTOR" ] || die "When five positional arguments are used, the fourth must be a destination selector and the fifth destination-vg."
                 REQUESTED_DEST_VG="$ARG5"
             fi
             ;;
@@ -803,6 +925,41 @@ parse_arguments() {
 ############################################################
 # VALIDATION / PRE-FLIGHT
 ############################################################
+
+
+# assign_destination_selector SELECTOR
+# Classifies and stores a backing disk number, exact slot, or destination bus.
+assign_destination_selector() {
+    ads_value="$1"
+    if ! ads_kind="$(destination_selector_kind "$ads_value" 2>/dev/null)"; then return 1; fi
+    case "$ads_kind" in
+        disk) REQUESTED_DEST_DISK="$(normalize_disk_number "$ads_value")" ;;
+        slot|bus) REQUESTED_DEST_SLOT_SELECTOR="$ads_value" ;;
+        *) return 1 ;;
+    esac
+    return 0
+}
+
+# resolve_destination_attachment
+# Resolves the requested exact/bus destination selector to a currently free slot.
+resolve_destination_attachment() {
+    if [ -z "$REQUESTED_DEST_SLOT_SELECTOR" ]; then
+        SCSI_DEVICE="$(first_free_scsi "$DEST_VMID")" || die "No free SCSI disk slot is available on VM $DEST_VMID."
+        return 0
+    fi
+
+    case "$REQUESTED_DEST_SLOT_SELECTOR" in
+        ide|sata|scsi|virtio)
+            SCSI_DEVICE="$(first_free_bus_slot "$DEST_VMID" "$REQUESTED_DEST_SLOT_SELECTOR")" || die "No free $REQUESTED_DEST_SLOT_SELECTOR disk slot is available on VM $DEST_VMID."
+            ;;
+        *)
+            valid_disk_slot "$REQUESTED_DEST_SLOT_SELECTOR" || die "Unsupported destination disk slot: $REQUESTED_DEST_SLOT_SELECTOR"
+            SCSI_DEVICE="$REQUESTED_DEST_SLOT_SELECTOR"
+            rda_value="$(disk_value "$DEST_VMID" "$SCSI_DEVICE" 2>/dev/null || :)"
+            [ -z "$rda_value" ] || die "Destination slot $SCSI_DEVICE is already occupied; use an overwrite helper to replace it."
+            ;;
+    esac
+}
 
 validate_destination_vm() {
     require_qemu_vm "$DEST_VMID"
@@ -855,11 +1012,14 @@ print_plan() {
     printf 'Destination VM status: %s\n' "${TARGET_STATUS:-unknown}"
     printf 'New LV:                %s\n' "$NEW_LV_PATH"
     printf 'Backing disk number:   disk-%s\n' "$DISK_NUMBER"
-    printf 'Attach as:             %s\n\n' "$SCSI_DEVICE"
+    printf 'Attach as:             %s\n' "$SCSI_DEVICE"
+    printf 'First boot device:     %s\n\n' "$([ "$BOOT_REQUESTED" -eq 1 ] && printf '%s' "$SCSI_DEVICE" || printf '%s' unchanged)"
     [ "$MODE" != "hot" ] || warn "Hot mode does not quiesce the source VM; the source can change while the copy runs."
 }
 
 attach_copy() {
+    ac_now="$(disk_value "$DEST_VMID" "$SCSI_DEVICE" 2>/dev/null || :)"
+    [ -z "$ac_now" ] || die "Destination slot $SCSI_DEVICE became occupied after preflight; refusing to attach the copied disk."
     info "Attaching $NEW_VOLID to VM $DEST_VMID as $SCSI_DEVICE..."
     if ! dryrun_cmd qm set "$DEST_VMID" "--${SCSI_DEVICE}" "$NEW_VOLID"; then
         if qm config "$DEST_VMID" 2>/dev/null | grep -qF "$NEW_VOLID"; then ATTACHED=1; fi
@@ -873,11 +1033,13 @@ verify_result() {
         dryrun_verify "Destination LV would exist"
         dryrun_verify "VM $DEST_VMID would reference $NEW_VOLID at $SCSI_DEVICE"
         dryrun_verify "Source guest state would match the requested $MODE mode"
+        verify_destination_boot_first "$DEST_VMID" "$SCSI_DEVICE"
         return 0
     fi
     lvs "${DEST_VG}/${NEW_LV_NAME}" >/dev/null 2>&1 || die "Destination LV is missing."
     vr_config="$(qm config "$DEST_VMID")"
     printf '%s\n' "$vr_config" | grep -qE "^${SCSI_DEVICE}:.*${NEW_VOLID}([,[:space:]]|$)" || die "Expected destination attachment is missing."
+    verify_destination_boot_first "$DEST_VMID" "$SCSI_DEVICE"
 }
 
 ############################################################

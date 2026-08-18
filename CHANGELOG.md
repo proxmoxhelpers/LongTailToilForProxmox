@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.3.0 — 2026-08-17
+
+Create-helper device selectors and boot-order promotion.
+
+- All four `create-disk-*` helpers accept exact source VM disk slots such as `sata0`, `ide2`, `scsi4`, and `virtio0` in addition to backing `disk-N` selectors.
+- Destination selectors may be a backing `disk-N`, an exact QEMU disk slot, or a bare bus name (`ide`, `sata`, `scsi`, `virtio`) meaning the first free slot on that bus.
+- Add helpers refuse occupied exact destination slots; overwrite helpers replace occupied exact slots and create into empty exact/bare-bus targets.
+- Added `boot` as an anywhere-on-the-command-line keyword. The actual destination slot is moved to the front of the VM boot order after attachment; overwrite `restart` applies the boot order before the VM is started.
+- Added explicit Proxmox slot-range validation: IDE 0–3, SATA 0–5, SCSI 0–30, VirtIO 0–15.
+- Expanded static and real copy/snapshot integration coverage for source-by-slot, exact destination slots, bare-bus first-free selection, and boot-order verification.
+
+## 3.2.3 — 2026-08-17
+
+Empty-target overwrite/add behavior.
+
+- `create-disk-copy-and-overwrite-disk-on-vm.sh` and `create-disk-snapshot-and-overwrite-disk-on-vm.sh` now accept `DEST_VMID disk-N` even when that destination backing disk is not currently configured.
+- When no active destination disk uses the requested number, the helper creates the result as exactly `vm-DESTVMID-disk-N` and attaches it to the first free SCSI slot.
+- `delete` becomes a no-op when there is no displaced disk.
+- The final LV name must still be physically free; orphaned or otherwise colliding same-name LVs are never overwritten implicitly.
+- Existing-target behavior is unchanged: archive to `disk-901+`, preserve by default, or delete only after verified replacement.
+- Added real integration cases for both copy and snapshot empty-target creation.
+
 ## 3.2.2 — 2026-08-17
 
 Overwrite transaction safety fix.

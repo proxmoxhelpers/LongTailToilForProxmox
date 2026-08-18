@@ -268,50 +268,50 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 
 #### `create-disk-snapshot-and-add-to-vm.sh`
 
-Create an LVM-thin snapshot from either a full LV path or `VMID + disk-N`, then attach it to a destination VM; optionally choose the destination backing disk number and use `pause`, `stop`, or `restart` on the source VM.
+Create an LVM-thin snapshot from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; attach it by backing disk number, exact slot, or first-free bus, with optional source-state handling and `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-add-to-vm.sh" -O "create-disk-snapshot-and-add-to-vm.sh" && chmod +x "create-disk-snapshot-and-add-to-vm.sh"
 ```
 
 ```sh
-./create-disk-snapshot-and-add-to-vm.sh 123 disk-0 456 disk-3 pause dryrun
+./create-disk-snapshot-and-add-to-vm.sh 123 sata0 456 virtio boot pause dryrun
 ```
 
 #### `create-disk-copy-and-add-to-vm.sh`
 
-Create a full verified copy from either a full LV path or `VMID + disk-N`, attach it to a destination VM, optionally choose the destination backing disk number/VG, and optionally `pause`, `stop`, or `restart` the source VM.
+Create a full verified copy from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; attach it by backing disk number, exact slot, or first-free bus, optionally choose the destination VG, and optionally use source-state handling plus `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
 ```
 
 ```sh
-./create-disk-copy-and-add-to-vm.sh 123 disk-0 456 disk-3 fastvg restart dryrun
+./create-disk-copy-and-add-to-vm.sh 123 scsi0 456 sata fastvg restart boot dryrun
 ```
 
 #### `create-disk-copy-and-overwrite-disk-on-vm.sh`
 
-Create and byte-verify an independent copy of the source, replace an existing destination disk while retaining its original `vm-VMID-disk-N` number, and rename the displaced disk to the first free `disk-901+` as `unusedN` (or permanently remove it with `delete`).
+Create and byte-verify an independent copy using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-overwrite-disk-on-vm.sh" -O "create-disk-copy-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-copy-and-overwrite-disk-on-vm.sh"
 ```
 
 ```sh
-./create-disk-copy-and-overwrite-disk-on-vm.sh 123 disk-0 456 disk-1 pause dryrun
+./create-disk-copy-and-overwrite-disk-on-vm.sh 123 sata0 456 sata0 pause boot dryrun
 ```
 
 #### `create-disk-snapshot-and-overwrite-disk-on-vm.sh`
 
-Create an LVM-thin snapshot of the source, replace an existing destination disk while retaining its original `vm-VMID-disk-N` number, and rename the displaced disk to the first free `disk-901+` as `unusedN` (or permanently remove it with `delete`).
+Create an LVM-thin snapshot using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion.
 
 ```sh
 wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-snapshot-and-overwrite-disk-on-vm.sh" -O "create-disk-snapshot-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-snapshot-and-overwrite-disk-on-vm.sh"
 ```
 
 ```sh
-./create-disk-snapshot-and-overwrite-disk-on-vm.sh /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 restart dryrun
+./create-disk-snapshot-and-overwrite-disk-on-vm.sh 123 scsi0 456 virtio restart boot dryrun
 ```
 
 #### `copy-disk-between-vms.sh`
@@ -552,6 +552,10 @@ The validated run covered all 36 command cases, including real `qm`, `pvesm`, LV
 
 Version 3.2.2 keeps those overwrite semantics and fixes the rollback/identity path exposed by real Proxmox testing: replacement identity is verified by LV UUID across renames, rollback restores the displaced LV by UUID, and rollback never deletes an `unusedN` entry through `qm`. The integration matrix covers all 40 commands.
 
+Version 3.2.3 also lets the two overwrite helpers create the requested `vm-DESTVMID-disk-N` when no active destination disk currently uses that number; the new disk is attached to the first free SCSI slot, while physical name collisions still fail safely.
+
+Version 3.3.0 expands all four `create-disk-*` helpers with exact source-slot selectors, exact or first-free destination bus/slot selection (`sata0`, `ide2`, `scsi4`, `virtio0`, or bare `sata|ide|scsi|virtio`), plus an optional `boot` keyword that promotes the actual destination slot to the front of the VM boot order.
+
 Run the same suite on your own host:
 
 ```sh
@@ -595,6 +599,10 @@ Read-only inspection helpers do not require elevation merely to run `--help`, `-
 - [Changelog](CHANGELOG.md)
 - [v3.2.2 overwrite rollback/identity fix](docs/V3.2.2-OVERWRITE-ROLLBACK-FIX.md)
 - [v3.2.2 static validation](docs/V3.2.2-STATIC-VALIDATION.md)
+- [v3.3.0 create-device selectors and boot](docs/V3.3.0-CREATE-DEVICE-SELECTORS-AND-BOOT.md)
+- [v3.3.0 static validation](docs/V3.3.0-STATIC-VALIDATION.md)
+- [v3.2.3 empty-target behavior](docs/V3.2.3-EMPTY-TARGET.md)
+- [v3.2.3 static validation](docs/V3.2.3-STATIC-VALIDATION.md)
 - [v3.2.1 overwrite disk-number fix](docs/V3.2.1-OVERWRITE-DISK-NUMBER-FIX.md)
 - [v3.2.1 static validation](docs/V3.2.1-STATIC-VALIDATION.md)
 - [v3.2.0 disk create/overwrite helpers](docs/V3.2.0-DISK-CREATE-OVERWRITE.md)
