@@ -147,6 +147,74 @@ require_proxmox_environment() {
     for CMD in qm pct pvesm lvs vgs pvs lvcreate lvremove vgcreate vgremove pvcreate losetup truncate awk sed grep sort sha256sum findmnt mountpoint; do require_command "$CMD"; done
 }
 
+# capture_test_provenance
+# Records enough immutable metadata to tie a result directory to the tested
+# source tree and host/tool versions. Missing optional version commands are
+# recorded rather than treated as test failures.
+capture_test_provenance() {
+    {
+        printf 'project_version=%s\n' "${PROJECT_VERSION:-unknown}"
+        printf 'test_suite_version=%s\n' "${TEST_SUITE_VERSION:-unknown}"
+        printf 'test_group=%s\n' "${TEST_GROUP:-unknown}"
+        printf 'test_run_id=%s\n' "${TEST_RUN_ID:-unknown}"
+        printf 'captured_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'hostname=%s\n' "$(hostname 2>/dev/null || printf 'unknown')"
+        printf 'kernel=%s\n' "$(uname -a 2>/dev/null || printf 'unknown')"
+    } > "$TEST_RESULT_DIR/environment.txt"
+
+    {
+        for ctp_cmd in pveversion pvesm qm pct lvm; do
+            if command -v "$ctp_cmd" >/dev/null 2>&1; then
+                printf '\n[%s]\n' "$ctp_cmd"
+                case "$ctp_cmd" in
+                    pveversion) pveversion -v 2>&1 || : ;;
+                    lvm) lvm version 2>&1 || : ;;
+                    *) "$ctp_cmd" --version 2>&1 || "$ctp_cmd" version 2>&1 || : ;;
+                esac
+            else
+                printf '\n[%s]\nmissing\n' "$ctp_cmd"
+            fi
+        done
+    } > "$TEST_RESULT_DIR/versions.txt"
+
+    (
+        cd "$PROJECT_ROOT"
+        find . -type f ! -path './.git/*' -print | sort | while IFS= read -r ctp_file; do
+            sha256sum "$ctp_file"
+        done
+    ) > "$TEST_RESULT_DIR/project-sha256.txt"
+}
+
+# capture_fixture_manifest
+# Copies the ownership ledgers before cleanup removes the disposable sandbox.
+capture_fixture_manifest() {
+    {
+        printf '%s\n' '[VMS]'
+        [ ! -f "$TEST_VM_OWNED" ] || cat "$TEST_VM_OWNED"
+        printf '%s\n' '[CTS]'
+        [ ! -f "$TEST_CT_OWNED" ] || cat "$TEST_CT_OWNED"
+        printf '%s\n' '[STORAGES]'
+        [ ! -f "$TEST_STORAGE_OWNED" ] || cat "$TEST_STORAGE_OWNED"
+        printf '%s\n' '[VGS]'
+        [ ! -f "$TEST_VG_OWNED" ] || cat "$TEST_VG_OWNED"
+    } > "$TEST_RESULT_DIR/fixture-manifest.txt"
+}
+
+# write_test_summary
+# Writes machine-readable group counters beside the human console summary.
+write_test_summary() {
+    {
+        printf 'project_version=%s\n' "${PROJECT_VERSION:-unknown}"
+        printf 'test_suite_version=%s\n' "${TEST_SUITE_VERSION:-unknown}"
+        printf 'test_group=%s\n' "${TEST_GROUP:-unknown}"
+        printf 'test_run_id=%s\n' "${TEST_RUN_ID:-unknown}"
+        printf 'passed=%s\n' "${TEST_PASS:-0}"
+        printf 'failed=%s\n' "${TEST_FAIL:-0}"
+        printf 'skipped=%s\n' "${TEST_SKIP:-0}"
+        printf 'anomalies=%s\n' "${TEST_ANOMALY:-0}"
+    } > "$TEST_RESULT_DIR/summary.txt"
+}
+
 # canonicalize_storage_config
 # Emits a semantic, order-independent representation of storage.cfg. Comments,
 # blank lines, stanza order and option order are ignored; storage IDs, types,
@@ -254,6 +322,7 @@ test_prepare_run() {
     mkdir -p "$TEST_RESULT_DIR" "$TEST_DATA_DIR"
     printf '%s\n' "PROXMOX_LVM_TOOLS_TEST_SANDBOX_V1" > "$TEST_WORK_DIR/.owner"
     : > "$TEST_VM_RESERVED"; : > "$TEST_VM_OWNED"; : > "$TEST_CT_OWNED"; : > "$TEST_STORAGE_OWNED"; : > "$TEST_VG_OWNED"
+    capture_test_provenance
     capture_project_backup_baseline
     capture_protected_state "$TEST_RESULT_DIR/baseline"
     TEST_VM_CURSOR=$((900000 + TEST_TOKEN_NUMBER % 50000))
@@ -618,6 +687,34 @@ run_expect_fail_unchanged() {
     return 0
 }
 
+
+# run_script_expect_fail_unchanged <name> <script-path> [args...]
+#
+# Runs a test-owned standalone script path that is expected to fail and proves
+# the complete disposable state is unchanged. This is used for failure-injected
+# copies of production helpers without exposing failure hooks in production.
+run_script_expect_fail_unchanged() {
+    rsfu_name="$1"
+    rsfu_script="$2"
+    shift 2
+    rsfu_safe="$(printf '%s' "$rsfu_name" | tr ' /:' '---')"
+    rsfu_before="$TEST_RESULT_DIR/refusal-before-$rsfu_safe"
+    rsfu_after="$TEST_RESULT_DIR/refusal-after-$rsfu_safe"
+    rsfu_log="$TEST_RESULT_DIR/refusal-output-$rsfu_safe.log"
+    snapshot_test_owned_state "$rsfu_before"
+    if sh "$rsfu_script" "$@" >"$rsfu_log" 2>&1; then
+        printf 'Expected injected command to fail safely, but it succeeded: %s\n' "$rsfu_name" >&2
+        return 1
+    fi
+    snapshot_test_owned_state "$rsfu_after"
+    if ! cmp -s "$rsfu_before" "$rsfu_after"; then
+        diff -u "$rsfu_before" "$rsfu_after" || :
+        printf 'Injected failure changed test-owned state: %s\n' "$rsfu_name" >&2
+        return 1
+    fi
+    return 0
+}
+
 ############################################################
 # OWNERSHIP-SAFE CLEANUP
 ############################################################
@@ -815,9 +912,13 @@ test_emergency_cleanup() {
     tec_rc="$1"
     trap - 0 HUP INT TERM
     set +e
-    if [ "${TEST_RUN:-false}" = "true" ] && [ "${TEST_KEEP:-false}" = "false" ]; then
-        test_cleanup_sandbox
-        if [ -n "${TEST_RESULT_DIR:-}" ] && [ -f "$TEST_RESULT_DIR/baseline.vgs" ]; then compare_protected_state; fi
+    if [ "${TEST_RUN:-false}" = "true" ] && [ -n "${TEST_RESULT_DIR:-}" ]; then
+        [ ! -d "$TEST_RESULT_DIR" ] || capture_fixture_manifest
+        if [ "${TEST_KEEP:-false}" = "false" ]; then
+            test_cleanup_sandbox
+            if [ -f "$TEST_RESULT_DIR/baseline.vgs" ]; then compare_protected_state; fi
+        fi
+        [ ! -d "$TEST_RESULT_DIR" ] || write_test_summary
     fi
     exit "$tec_rc"
 }
@@ -828,6 +929,7 @@ test_emergency_cleanup() {
 
 test_finish_run() {
     trap - 0 HUP INT TERM
+    capture_fixture_manifest
     if [ "$TEST_KEEP" = "true" ]; then
         print_warning "Sandbox retained by request: $TEST_WORK_DIR"
         print_warning "Only remove it after verifying its .owner marker and test object names."
@@ -841,6 +943,7 @@ test_finish_run() {
     printf '%sSkipped%s   : %s%s%s\n' "$CYAN" "$RESET" "$YELLOW" "$TEST_SKIP" "$RESET"
     printf '%sAnomalies%s : %s%s%s\n' "$CYAN" "$RESET" "$YELLOW" "$TEST_ANOMALY" "$RESET"
     printf '%sLogs%s      : %s%s%s\n' "$CYAN" "$RESET" "$BLUE" "$TEST_RESULT_DIR" "$RESET"
+    write_test_summary
     [ "$TEST_FAIL" -eq 0 ] || return 1
     [ "$TEST_ANOMALY" -eq 0 ] || return 1
     return 0

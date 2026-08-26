@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.5.1"
-    TEST_SUITE_VERSION="2.9.1"
+    PROJECT_VERSION="3.7.1"
+    TEST_SUITE_VERSION="3.1.1"
     TEST_GROUP="copy-snapshot"
     test_reset_counters
     test_parse_arguments "$@"
@@ -34,6 +34,8 @@ main() {
     run_case "create add helpers refuse occupied exact destination slot" test_create_add_occupied_slot_refusal
     run_case "all four create helpers refuse ambiguous source disk-N" test_create_source_ambiguity_refusal
     run_case "overwrite helpers pause refuse unsafe sole-SCSI topology" test_overwrite_pause_sole_scsi_refusal
+    run_case "copy overwrite rollback restores state after injected mid-transaction failure" test_copy_overwrite_injected_rollback
+    run_case "snapshot overwrite rollback restores state after injected mid-transaction failure" test_snapshot_overwrite_injected_rollback
     run_case "create-disk-snapshot-and-add-to-vm.sh base/template naming" test_create_base_snapshot_add
     run_case "create-disk-copy-and-add-to-vm.sh base/template naming" test_create_base_copy_add
     run_case "create-disk-copy-and-overwrite-disk-on-vm.sh inactive base source" test_create_base_copy_overwrite_source
@@ -283,6 +285,79 @@ test_overwrite_pause_sole_scsi_refusal() {
     qm config "$tops_snap_vm" | grep -F "scsi0: $TEST_STORAGE_B:$tops_snap_name" >/dev/null
     assert_lv_exists "$tops_snap_lv"
     qm stop "$tops_snap_vm" >/dev/null
+}
+
+
+# make_failure_injected_helper <source-script> <destination-script> <attach-info-line>
+#
+# Creates a test-only standalone copy that aborts immediately before the
+# replacement attach step. At that point the old disk has been detached and
+# archived and the staged replacement has already taken the final disk number.
+make_failure_injected_helper() {
+    mfih_source="$1"
+    mfih_destination="$2"
+    mfih_attach_line="$3"
+
+    awk -v marker="$mfih_attach_line" '
+        $0 == marker {
+            print "    die \"TEST-INJECTED: abort before replacement attachment\""
+        }
+        { print }
+    ' "$PROJECT_ROOT/$mfih_source" > "$mfih_destination"
+    grep -F 'TEST-INJECTED: abort before replacement attachment' "$mfih_destination" >/dev/null ||
+        die "Could not construct failure-injected helper: $mfih_source"
+}
+
+test_copy_overwrite_injected_rollback() {
+    tcoir_vm="$(create_test_vm overwrite-copy-rollback)"
+    tcoir_old_name="vm-${tcoir_vm}-disk-0"
+    tcoir_old_lv="$(create_thin_lv "$TEST_VG_B" "$tcoir_old_name" 32M)"
+    write_test_pattern "$tcoir_old_lv" "copy-overwrite-rollback-old"
+    attach_test_lv "$tcoir_vm" "$TEST_STORAGE_B" "$tcoir_old_name" scsi0
+    tcoir_old_uuid="$(lvs --noheadings -o lv_uuid "$tcoir_old_lv" | awk '{$1=$1;print}')"
+
+    tcoir_script="$TEST_DATA_DIR/injected-copy-overwrite.sh"
+    make_failure_injected_helper \
+        create-disk-copy-and-overwrite-disk-on-vm.sh \
+        "$tcoir_script" \
+        '    info "Attaching replacement $NEW_VOLID at $DEST_SLOT..."'
+
+    run_script_expect_fail_unchanged \
+        "copy-overwrite-rollback-injected" \
+        "$tcoir_script" \
+        "$COPY_SRC_VM" scsi0 "$tcoir_vm" scsi0
+
+    grep -F 'TEST-INJECTED: abort before replacement attachment' \
+        "$TEST_RESULT_DIR/refusal-output-copy-overwrite-rollback-injected.log" >/dev/null
+    [ "$(lvs --noheadings -o lv_uuid "$tcoir_old_lv" | awk '{$1=$1;print}')" = "$tcoir_old_uuid" ]
+    qm config "$tcoir_vm" | grep -F "scsi0: $TEST_STORAGE_B:$tcoir_old_name" >/dev/null
+    ! qm config "$tcoir_vm" | grep -E '^unused[0-9]+:' >/dev/null
+}
+
+test_snapshot_overwrite_injected_rollback() {
+    tsoir_vm="$(create_test_vm overwrite-snapshot-rollback)"
+    tsoir_old_name="vm-${tsoir_vm}-disk-0"
+    tsoir_old_lv="$(create_thin_lv "$TEST_VG_B" "$tsoir_old_name" 32M)"
+    write_test_pattern "$tsoir_old_lv" "snapshot-overwrite-rollback-old"
+    attach_test_lv "$tsoir_vm" "$TEST_STORAGE_B" "$tsoir_old_name" scsi0
+    tsoir_old_uuid="$(lvs --noheadings -o lv_uuid "$tsoir_old_lv" | awk '{$1=$1;print}')"
+
+    tsoir_script="$TEST_DATA_DIR/injected-snapshot-overwrite.sh"
+    make_failure_injected_helper \
+        create-disk-snapshot-and-overwrite-disk-on-vm.sh \
+        "$tsoir_script" \
+        '    info "Attaching snapshot $NEW_VOLID at $DEST_SLOT..."'
+
+    run_script_expect_fail_unchanged \
+        "snapshot-overwrite-rollback-injected" \
+        "$tsoir_script" \
+        "$COPY_SRC_VM" scsi0 "$tsoir_vm" scsi0
+
+    grep -F 'TEST-INJECTED: abort before replacement attachment' \
+        "$TEST_RESULT_DIR/refusal-output-snapshot-overwrite-rollback-injected.log" >/dev/null
+    [ "$(lvs --noheadings -o lv_uuid "$tsoir_old_lv" | awk '{$1=$1;print}')" = "$tsoir_old_uuid" ]
+    qm config "$tsoir_vm" | grep -F "scsi0: $TEST_STORAGE_B:$tsoir_old_name" >/dev/null
+    ! qm config "$tsoir_vm" | grep -E '^unused[0-9]+:' >/dev/null
 }
 
 test_create_base_snapshot_add() {

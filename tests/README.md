@@ -1,13 +1,82 @@
 # Proxmox LVM Tools Test Suite
 
-Test suite version: **2.9.1**  
-Project target: **3.5.1**
+Test suite version: **3.1.1**  
+Project target: **3.7.1**
 
-This suite exercises all 42 project commands on a real Proxmox node while avoiding production storage and guests.
+This suite exercises all 81 project commands on a real Proxmox node while avoiding production storage and guests.
 
 See [`FIRST-RUN-FINDINGS-2026-08-15.md`](FIRST-RUN-FINDINGS-2026-08-15.md) and [`SECOND-RUN-FINDINGS-2026-08-15.md`](SECOND-RUN-FINDINGS-2026-08-15.md) for the analyses from the first two full integration runs.
 
 
+
+## v3.1.1 — v3.7.1 real-host corrective pass
+
+v3.1.1 keeps the 137-case real integration definition and adds static regression
+contracts for the issues exposed by the 2026-08-20 v3.7.0 run. That run passed
+130/137 real integration cases with zero protected-state anomalies.
+
+Corrections cover semantic Proxmox disk-option comparison, regular-file staging
+for block-device `qm importdisk`, exact-restore handling of regenerated QEMU
+`vmgenid`, zero-SSH remote dry-run, a Proxmox-valid unmanaged-name fixture, and
+archive checksum verification from the correct extraction root.
+
+The current static/CLI group passes **78/78** cases with zero failures, skips or
+anomalies. A fresh full run on 2026-08-22 also passes all **137/137** real
+integration cases across 14 groups with zero failures, skips or anomalies. Project
+v3.7.1 is therefore the current real-host integration-validated baseline for this
+suite definition; see `../docs/V3.7.1-REAL-INTEGRATION-RESULTS.md`.
+
+## v3.1.0 — v3.7.0 mount-family consolidation and CLI-contract audit
+
+The v3.7.0 tree contained **81 public commands** and **137 real integration cases**
+across 14 operational groups. Six historical mount/unmount entry points are replaced
+by five clearer commands:
+
+- `mount-lvm-drives.sh`
+- `unmount-lvm-drives.sh`
+- `mount-vm-drive.sh`
+- `mount-all-vm-drives.sh`
+- `unmount-all-vm-drives.sh`
+
+`mount-vm-drive.sh` and `mount-all-vm-drives.sh` use the same source implementation
+except for the hard-coded scope selector. Integration coverage exercises direct-LV,
+partitioned-LV, one-slot VM, all-slot VM, role-detection, read-write persistence,
+dry-run immutability, ownership-state, exact source verification and paired cleanup
+paths.
+
+The static suite additionally enforces every public command's five help aliases
+(`-h`, `-?`, `/h`, `/?`, `--help`), usage output for incomplete required arguments,
+one exact dry-run explanation line, parser-option/help agreement, live-help/`.usage`
+identity, documentation synchronization, and the single/all VM mount-engine source
+identity contract.
+
+That v3.7.0 static/CLI group passed **74/74** cases with zero failures, skips or
+anomalies.
+
+The real integration definition had to be rerun on a disposable Proxmox/LVM host
+before v3.7.0 could be described as real-host integration-validated. Its 2026-08-20
+run later passed 130/137 real cases with zero protected-state anomalies; at that
+point v3.5.1 remained the last fully passing real-host baseline.
+
+## v3.0.2 — v3.6.2 selective v3.6 command integration
+
+The v3.6.2 tree contained **82 public commands** and **137 real integration cases** across 14 operational groups. It kept the v3.5.2 provenance, protected-state, dry-run/refusal and overwrite failure-injection infrastructure while adding the alternate v3.6 QoL/workflow groups. The public surface was later consolidated to 81 commands by the v3.7.0 mount-family refactor.
+
+The port is not a wholesale replacement with the alternate branch. The original 42 helpers remain on the newer v3.5.2 behavior line; only the 40 new commands and selected style/testing improvements were integrated. New helpers are hardened around physical LV identity, inactive activation restoration, exact mount ownership, strict slot validation, snapshot-safe direct config editing, UUID-owned cleanup and transaction rollback.
+
+That v3.6.2 static/CLI group passed **71/71** cases and validated all 82 commands for POSIX syntax, standalone packaging, setup/main/end/usage lifecycle, elevation placement, argument-call documentation, live help/usage synchronization, documentation inventory, parser/help agreement, archive/remote-transfer contracts and the existing v3.5.2 safety invariants.
+
+At that release point, the 137 real integration cases still required a disposable Proxmox/LVM run before v3.6.2 could be described as real-host integration-validated, and v3.5.1 / suite v2.9.1 remained the last completed clean real-host baseline.
+
+## v2.9.2 — v3.5.2 documentation-contract, provenance and rollback coverage
+
+v3.5.2 audits the public documentation against implementation behavior and turns the discovered contracts into executable regressions. All public helpers now use the same setup-time elevation detection boundary; explicit `import-disk-and-attach.sh` slots are preflight-limited to `scsi0..scsi30`; `fix-vm-volume-names.sh` repairs only already-managed `vm-*`/`base-*` names and preserves custom names; and `mount-vm-root.sh` reports the strongest Linux-root candidate.
+
+That v3.5.2 static/CLI group passed **54/54** cases. The real integration definition expanded from 88 to **92 cases**. New cases proved non-SCSI import-slot refusal before import, unmanaged-name preservation, and test-only mid-transaction failure rollback for both overwrite engines after the displaced disk is archived and the replacement has taken the final disk number.
+
+Every result directory now records `environment.txt`, `versions.txt`, `project-sha256.txt`, `fixture-manifest.txt` and `summary.txt`. Successful static runs are retained as evidence rather than deleted.
+
+The supplied v3.5.1 run on 2026-08-17 is the accepted predecessor baseline: 50/50 static and 88/88 real integration cases passed with zero skips/failures/anomalies. v3.5.2 requires a fresh 92-case real-host run because this release changes command preflight/inspection behavior and the test definition.
 
 ## v2.9.1 — v3.5.1 activation-skip and network-fixture corrections
 
@@ -15,7 +84,7 @@ The v3.4.7 real-host run proved that a Proxmox `base-*` template LV can be inact
 
 The network group now creates its own registered loopback LVM-thin sandbox before creating the LXC rootfs. A static contract enforces both provisioning order and the explicit ownership assertion.
 
-The real integration definition remains **88 cases**. v3.5.1 needs a fresh real-host run.
+The real integration definition remains **88 cases**. This build subsequently completed the clean 2026-08-17 acceptance run recorded in `../docs/V3.5.1-REAL-INTEGRATION-RESULTS.md`.
 
 ## v2.9.0 — v3.5.0 structural/style enforcement
 
@@ -362,7 +431,17 @@ Logs are written below:
 /var/tmp/proxmox-lvm-tools-test-results/
 ```
 
-Each run receives a unique directory.
+Each run receives a unique directory. v2.9.2 also writes provenance and summary evidence into that directory:
+
+```text
+environment.txt
+versions.txt
+project-sha256.txt
+fixture-manifest.txt
+summary.txt
+```
+
+`project-sha256.txt` binds the run to the project files that were actually tested; `environment.txt` and `versions.txt` capture the host/tool context; `fixture-manifest.txt` records owned disposable resources; and `summary.txt` records the final counters.
 
 Protected-state differences are written as:
 
@@ -384,4 +463,4 @@ These are real integration tests for storage-management software. The fixtures a
 
 Do not manually rename, attach production storage to, or repurpose a test VG/storage/VM/CT during a running group. Ownership changes intentionally cause cleanup to refuse the affected layer and retain evidence rather than guessing.
 
-The last fully documented real-Proxmox integration-validated POSIX baseline is project **v3.0.1** for its then-current 36-command matrix. The expanded **v3.4.2 / suite v2.8.0** definition has stronger coverage for all 42 current helpers, but it must complete a fresh real-host run with zero failures and zero protected-state anomalies before being described as integration-validated.
+The current fully documented real-Proxmox integration-validated baseline is project **v3.7.1 / suite v3.1.1**. Its 2026-08-22 all-groups run passed **78/78 static/CLI cases and 137/137 real integration cases across all 14 operational groups**, with zero failures, skips or anomalies. See `../docs/V3.7.1-REAL-INTEGRATION-RESULTS.md`. Earlier baseline statements in the version-history sections above describe the state at those historical release points.

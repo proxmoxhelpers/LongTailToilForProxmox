@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.5.1"
-    TEST_SUITE_VERSION="2.9.1"
+    PROJECT_VERSION="3.7.1"
+    TEST_SUITE_VERSION="3.1.1"
     TEST_GROUP="disk-config"
     test_reset_counters
     test_parse_arguments "$@"
@@ -39,6 +39,7 @@ main() {
     run_case "renumber-vm-disks.sh shared-volume refusal" test_renumber_shared_refusal
     run_case "renumber-vm-disks.sh base/template volumes" test_renumber_base_disks
     run_case "fix-vm-volume-names.sh" test_fix_vm_volume_names
+    run_case "fix-vm-volume-names.sh leaves unrelated unmanaged LVM names unchanged" test_fix_unmanaged_name_preservation
     run_case "fix-vm-volume-names.sh corrected-name collision refusal" test_fix_name_collision
     run_case "fix-vm-volume-names.sh base/template volumes" test_fix_base_volume_names
 }
@@ -260,6 +261,28 @@ test_fix_vm_volume_names() {
     qm config "$tfvn_vm" | grep -F "$TEST_STORAGE_A:vm-${tfvn_vm}-disk-0" >/dev/null
     qm config "$tfvn_vm" | grep -F "$TEST_STORAGE_A:base-${tfvn_vm}-disk-1" >/dev/null
 }
+
+test_fix_unmanaged_name_preservation() {
+    tfup_vm="$(create_test_vm fix-unmanaged)"
+    tfup_managed_name="vm-${tfup_vm}-disk-0"
+    tfup_managed_lv="$(create_thin_lv "$TEST_VG_A" "$tfup_managed_name" 16M)"
+    attach_test_lv "$tfup_vm" "$TEST_STORAGE_A" "$tfup_managed_name" scsi0
+
+    # Proxmox LVM-thin deliberately rejects arbitrary custom image names as
+    # configured VM disks. Keep a custom LV in the same owned VG instead and
+    # prove the repair helper never scans/renames unrelated unmanaged LVs.
+    tfup_name="custom-${tfup_vm}-root"
+    tfup_lv="$(create_thin_lv "$TEST_VG_A" "$tfup_name" 16M)"
+    tfup_uuid="$(lvs --noheadings -o lv_uuid "$tfup_lv" | sed 's/[[:space:]]//g')"
+
+    run_dryrun_unchanged "fix-unmanaged-name" fix-vm-volume-names.sh "$tfup_vm"
+    project_cmd fix-vm-volume-names.sh "$tfup_vm"
+
+    assert_lv_exists "$TEST_VG_A/$tfup_name"
+    [ "$(lvs --noheadings -o lv_uuid "$TEST_VG_A/$tfup_name" | sed 's/[[:space:]]//g')" = "$tfup_uuid" ]
+    qm config "$tfup_vm" | grep -F "$TEST_STORAGE_A:$tfup_managed_name" >/dev/null
+}
+
 
 test_fix_name_collision() {
     tfnc_vm="$(create_test_vm fix-collision)"

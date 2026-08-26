@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.5.1"
-    TEST_SUITE_VERSION="2.9.1"
+    PROJECT_VERSION="3.7.1"
+    TEST_SUITE_VERSION="3.1.1"
     TEST_GROUP="storage-io"
     test_reset_counters
     test_parse_arguments "$@"
@@ -30,6 +30,7 @@ main() {
     run_case "move-disk-to-storage.sh preserves bytes/options" test_move_disk_storage
     run_case "bulk-change-vm-storage.sh multi-VM byte preservation" test_bulk_change_storage
     run_case "import-disk-and-attach.sh explicit + default slots" test_import_disk
+    run_case "import-disk-and-attach.sh refuses non-SCSI explicit slot before import" test_import_invalid_slot_refusal
     run_case "export-vm-disk.sh qcow2 + inferred raw with byte verification" test_export_disk
     run_case "change-vm-storage-prefix.sh preserves volume/options" test_change_storage_prefix
 }
@@ -135,6 +136,17 @@ test_import_disk() {
     tid_default_volid="$(slot_volid "$tid_default_vm" scsi0)"; [ "${tid_default_volid%%:*}" = "$TEST_STORAGE_A" ]
     cmp -n 16777216 "$tid_image" "$(pvesm path "$tid_default_volid")"
 }
+
+test_import_invalid_slot_refusal() {
+    tisr_vm="$(create_test_vm import-invalid-slot)"
+    tisr_image="$TEST_DATA_DIR/import-invalid-slot.raw"
+    qemu-img create -f raw "$tisr_image" 8M >/dev/null
+    run_expect_fail_unchanged "import-disk-invalid-slot" import-disk-and-attach.sh "$tisr_image" "$tisr_vm" "$TEST_STORAGE_A" sata0
+    grep -F "Explicit slot must be scsi0..scsi30" "$TEST_RESULT_DIR/refusal-output-import-disk-invalid-slot.log" >/dev/null
+    [ -z "$(qm config "$tisr_vm" | awk -F': ' '$1 ~ /^unused[0-9]+$/ {print; exit}')" ]
+    [ -z "$(lvs --noheadings -o lv_name "$TEST_VG_A" 2>/dev/null | sed 's/^[[:space:]]*//' | grep -E "^vm-${tisr_vm}-disk-" || :)" ]
+}
+
 
 test_export_disk() {
     ted_vm="$(create_vm_with_disk_a export)"

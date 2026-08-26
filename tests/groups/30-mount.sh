@@ -12,8 +12,8 @@ PROJECT_ROOT="$(CDPATH= cd "$TEST_ROOT/.." && pwd)"
 
 setup() {
     define_colours
-    PROJECT_VERSION="3.5.1"
-    TEST_SUITE_VERSION="2.9.1"
+    PROJECT_VERSION="3.7.1"
+    TEST_SUITE_VERSION="3.1.1"
     TEST_GROUP="mount"
     test_reset_counters
     test_parse_arguments "$@"
@@ -28,12 +28,12 @@ main() {
     test_prepare_run
     create_storage_sandbox
     prepare_mount_fixture
-    run_case "mount-vm-drives.sh direct read-only" test_mount_vm_drives
-    run_case "unmount-vm-drives.sh direct filesystem" test_unmount_vm_drives
-    run_case "mount-vm-drives.sh read-write on disposable LV" test_mount_vm_drives_rw
-    run_case "mount-vm-disk.sh direct filesystem" test_mount_vm_disk
-    run_case "mount-vm-disk.sh partitioned disk via kpartx" test_mount_vm_disk_partitioned
-    run_case "mount-vm-root.sh" test_mount_vm_root
+    run_case "mount-lvm-drives.sh direct read-only" test_mount_lvm_drives
+    run_case "unmount-lvm-drives.sh direct filesystem" test_unmount_lvm_drives
+    run_case "mount-lvm-drives.sh read-write on disposable LV" test_mount_lvm_drives_rw
+    run_case "mount-vm-drive.sh direct filesystem + root-role detection" test_mount_vm_drive
+    run_case "mount-vm-drive.sh partitioned disk via kpartx" test_mount_vm_drive_partitioned
+    run_case "mount-all-vm-drives.sh + unmount-all-vm-drives.sh all-disk lifecycle" test_mount_all_vm_drives
 }
 
 end() {
@@ -97,72 +97,90 @@ prepare_mount_fixture() {
 # TEST CASES
 ############################################################
 
-test_mount_vm_drives() {
-    tmvd_root="$TEST_DATA_DIR/direct-mount"
-    run_dryrun_unchanged "mount-vm-drives" mount-vm-drives.sh "$MOUNT_LV" "$tmvd_root" --ro
-    project_cmd mount-vm-drives.sh "$MOUNT_LV" "$tmvd_root" --ro
-    mountpoint -q "$tmvd_root/part1"
-    [ -f "$tmvd_root/part1/etc/os-release" ]
-    project_cmd unmount-vm-drives.sh "$MOUNT_LV"
-    ! mountpoint -q "$tmvd_root/part1"
+test_mount_lvm_drives() {
+    tmld_root="$TEST_DATA_DIR/direct-mount"
+    run_dryrun_unchanged "mount-lvm-drives" mount-lvm-drives.sh "$MOUNT_LV" "$tmld_root" --ro
+    project_cmd mount-lvm-drives.sh "$MOUNT_LV" "$tmld_root" --ro
+    mountpoint -q "$tmld_root/part1"
+    [ -f "$tmld_root/part1/etc/os-release" ]
+    project_cmd unmount-lvm-drives.sh "$MOUNT_LV"
+    ! mountpoint -q "$tmld_root/part1"
 }
 
-test_unmount_vm_drives() {
-    tuv_root="$TEST_DATA_DIR/unmount-fixture"
-    mkdir -p "$tuv_root"
-    mount -o ro "$MOUNT_LV" "$tuv_root"
-    mountpoint -q "$tuv_root" || return 1
-    run_dryrun_unchanged "unmount-vm-drives" unmount-vm-drives.sh "$MOUNT_LV"
-    mountpoint -q "$tuv_root" || { printf 'Dry-run unexpectedly unmounted the filesystem.\n' >&2; return 1; }
-    project_cmd unmount-vm-drives.sh "$MOUNT_LV"
-    ! mountpoint -q "$tuv_root"
+test_unmount_lvm_drives() {
+    tuld_root="$TEST_DATA_DIR/unmount-fixture"
+    mkdir -p "$tuld_root"
+    mount -o ro "$MOUNT_LV" "$tuld_root"
+    mountpoint -q "$tuld_root" || return 1
+    run_dryrun_unchanged "unmount-lvm-drives" unmount-lvm-drives.sh "$MOUNT_LV"
+    mountpoint -q "$tuld_root" || {
+        printf 'Dry-run unexpectedly unmounted the filesystem.\n' >&2
+        return 1
+    }
+    project_cmd unmount-lvm-drives.sh "$MOUNT_LV"
+    ! mountpoint -q "$tuld_root"
 }
 
-test_mount_vm_drives_rw() {
-    tmvrw_root="$TEST_DATA_DIR/direct-rw"
-    run_dryrun_unchanged "mount-vm-drives-rw" mount-vm-drives.sh "$MOUNT_LV" "$tmvrw_root" --rw
-    project_cmd mount-vm-drives.sh "$MOUNT_LV" "$tmvrw_root" --rw
-    mountpoint -q "$tmvrw_root/part1"
-    printf '%s\n' "rw-test-${TEST_TOKEN}" > "$tmvrw_root/part1/rw-test.txt"
+test_mount_lvm_drives_rw() {
+    tmlrw_root="$TEST_DATA_DIR/direct-rw"
+    run_dryrun_unchanged "mount-lvm-drives-rw" mount-lvm-drives.sh "$MOUNT_LV" "$tmlrw_root" --rw
+    project_cmd mount-lvm-drives.sh "$MOUNT_LV" "$tmlrw_root" --rw
+    mountpoint -q "$tmlrw_root/part1"
+    printf '%s\n' "rw-test-${TEST_TOKEN}" > "$tmlrw_root/part1/rw-test.txt"
     sync
-    project_cmd unmount-vm-drives.sh "$MOUNT_LV"
-    ! mountpoint -q "$tmvrw_root/part1"
+    project_cmd unmount-lvm-drives.sh "$MOUNT_LV"
+    ! mountpoint -q "$tmlrw_root/part1"
 
-    tmvrw_verify="$TEST_DATA_DIR/direct-rw-verify"
-    project_cmd mount-vm-drives.sh "$MOUNT_LV" "$tmvrw_verify" --ro
-    grep -Fx "rw-test-${TEST_TOKEN}" "$tmvrw_verify/part1/rw-test.txt" >/dev/null
-    project_cmd unmount-vm-drives.sh "$MOUNT_LV"
+    tmlrw_verify="$TEST_DATA_DIR/direct-rw-verify"
+    project_cmd mount-lvm-drives.sh "$MOUNT_LV" "$tmlrw_verify" --ro
+    grep -Fx "rw-test-${TEST_TOKEN}" "$tmlrw_verify/part1/rw-test.txt" >/dev/null
+    project_cmd unmount-lvm-drives.sh "$MOUNT_LV"
 }
 
-test_mount_vm_disk() {
-    tmvd_root="$TEST_DATA_DIR/vm-disk-mount"
-    run_dryrun_unchanged "mount-vm-disk" mount-vm-disk.sh "$MOUNT_VM" scsi0 "$tmvd_root" --ro
-    project_cmd mount-vm-disk.sh "$MOUNT_VM" scsi0 "$tmvd_root" --ro
-    mountpoint -q "$tmvd_root/part1"
-    [ -f "$tmvd_root/part1/etc/os-release" ]
-    project_cmd unmount-vm-drives.sh "$MOUNT_LV"
+test_mount_vm_drive() {
+    tmvd_root="$TEST_DATA_DIR/vm-drive-mount"
+    tmvd_out="$TEST_RESULT_DIR/mount-vm-drive-output.txt"
+    run_dryrun_unchanged "mount-vm-drive" mount-vm-drive.sh "$MOUNT_VM" scsi0 "$tmvd_root" --ro
+    project_cmd mount-vm-drive.sh "$MOUNT_VM" scsi0 "$tmvd_root" --ro > "$tmvd_out"
+    mountpoint -q "$tmvd_root/scsi0/whole"
+    [ -f "$tmvd_root/scsi0/whole/etc/os-release" ]
+    grep -F "Linux root" "$tmvd_out" >/dev/null
+    grep -F "Most likely Linux root:" "$tmvd_out" >/dev/null
+    [ -f "$tmvd_root/.longtailtoil-mounts-${MOUNT_VM}.state" ]
+    run_dryrun_unchanged "unmount-all-vm-drives-single" unmount-all-vm-drives.sh "$MOUNT_VM" "$tmvd_root"
+    mountpoint -q "$tmvd_root/scsi0/whole"
+    project_cmd unmount-all-vm-drives.sh "$MOUNT_VM" "$tmvd_root"
+    ! mountpoint -q "$tmvd_root/scsi0/whole"
+    [ ! -e "$tmvd_root/.longtailtoil-mounts-${MOUNT_VM}.state" ]
 }
 
-test_mount_vm_disk_partitioned() {
-    tmvp_root="$TEST_DATA_DIR/partitioned-mount"
-    run_dryrun_unchanged "mount-vm-disk-partitioned" mount-vm-disk.sh "$MOUNT_VM" scsi1 "$tmvp_root" --ro
-    project_cmd mount-vm-disk.sh "$MOUNT_VM" scsi1 "$tmvp_root" --ro
-    mountpoint -q "$tmvp_root/part1"
-    grep -F "partitioned proxmox-lvm-tools" "$tmvp_root/part1/etc/os-release" >/dev/null
+test_mount_vm_drive_partitioned() {
+    tmvdp_root="$TEST_DATA_DIR/partitioned-mount"
+    run_dryrun_unchanged "mount-vm-drive-partitioned" mount-vm-drive.sh "$MOUNT_VM" scsi1 "$tmvdp_root" --ro
+    project_cmd mount-vm-drive.sh "$MOUNT_VM" scsi1 "$tmvdp_root" --ro
+    mountpoint -q "$tmvdp_root/scsi1/part1"
+    grep -F "partitioned proxmox-lvm-tools" "$tmvdp_root/scsi1/part1/etc/os-release" >/dev/null
     [ -e "/dev/mapper/$MOUNT_PART_MAP" ]
-    project_cmd unmount-vm-drives.sh "$MOUNT_PART_LV"
-    ! mountpoint -q "$tmvp_root/part1"
+    project_cmd unmount-all-vm-drives.sh "$MOUNT_VM" "$tmvdp_root"
+    ! mountpoint -q "$tmvdp_root/scsi1/part1"
     [ ! -e "/dev/mapper/$MOUNT_PART_MAP" ]
 }
 
-test_mount_vm_root() {
-    tmvr_root="$TEST_DATA_DIR/vm-root-mount"
-    tmvr_out="$TEST_RESULT_DIR/mount-vm-root-output.txt"
-    run_dryrun_unchanged "mount-vm-root" mount-vm-root.sh "$MOUNT_VM" scsi0 "$tmvr_root" --ro
-    project_cmd mount-vm-root.sh "$MOUNT_VM" scsi0 "$tmvr_root" --ro > "$tmvr_out"
-    mountpoint -q "$tmvr_root/part1"
-    grep -F "Linux root" "$tmvr_out" >/dev/null
-    project_cmd unmount-vm-drives.sh "$MOUNT_LV"
+test_mount_all_vm_drives() {
+    tmavd_root="$TEST_DATA_DIR/all-drives-mount"
+    tmavd_out="$TEST_RESULT_DIR/mount-all-vm-drives-output.txt"
+    run_dryrun_unchanged "mount-all-vm-drives" mount-all-vm-drives.sh "$MOUNT_VM" "$tmavd_root" --ro
+    project_cmd mount-all-vm-drives.sh "$MOUNT_VM" "$tmavd_root" --ro > "$tmavd_out"
+    mountpoint -q "$tmavd_root/scsi0/whole"
+    mountpoint -q "$tmavd_root/scsi1/part1"
+    grep -F "Most likely Linux root:" "$tmavd_out" >/dev/null
+    [ -f "$tmavd_root/.longtailtoil-mounts-${MOUNT_VM}.state" ]
+    run_dryrun_unchanged "unmount-all-vm-drives" unmount-all-vm-drives.sh "$MOUNT_VM" "$tmavd_root"
+    mountpoint -q "$tmavd_root/scsi0/whole"
+    project_cmd unmount-all-vm-drives.sh "$MOUNT_VM" "$tmavd_root"
+    ! mountpoint -q "$tmavd_root/scsi0/whole"
+    ! mountpoint -q "$tmavd_root/scsi1/part1"
+    [ ! -e "$tmavd_root/.longtailtoil-mounts-${MOUNT_VM}.state" ]
 }
 
 ############################################################
