@@ -1,0 +1,21 @@
+unmount-lvm-drives.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  unmount-lvm-drives.sh <lvm-volume-path> [dryrun]
+
+DESCRIPTION
+  Unmounts filesystems whose source is the selected LVM volume or its kpartx
+  partition mappings, then removes those mappings only after verifying the
+  selected sources are no longer mounted. Empty mount directories created by
+  the matching low-level mount workflow are removed when safe.
+
+EXAMPLES
+  unmount-lvm-drives.sh /dev/pve/vm-123-disk-0
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

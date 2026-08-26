@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Swap the complete configuration values of two VM disk slots.
+On a stopped QEMU VM, swap the complete configuration values of two existing disk slots after backing up the VM configuration.
 
 ## Usage
 
@@ -16,20 +16,44 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-Usage: swap-vm-disks.sh <vmid> <slot-a> <slot-b> [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+swap-vm-disks.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  swap-vm-disks.sh <vmid> <slot-a> <slot-b> [dryrun]
+
+DESCRIPTION
+  Swaps the complete configuration values of two existing QEMU disk slots.
+
+SAFETY
+  The VM must be stopped. Both slots must already exist. The VM config is
+  backed up before the atomic rewrite and verified afterward.
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`swap-vm-disks.sh.usage`](./swap-vm-disks.sh.usage).
+
+## Test coverage
+
+- Integration reference: `60-disk-config.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/swap-vm-disks.sh" -O "swap-vm-disks.sh" && chmod +x "swap-vm-disks.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/swap-vm-disks.sh" -O "swap-vm-disks.sh" && chmod +x "swap-vm-disks.sh"
 ```
 
 ## Examples
@@ -48,7 +72,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-swap-vm-disks.sh 3.5.1 (project 3.5.1)
+swap-vm-disks.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

@@ -1,0 +1,22 @@
+remove-vm-disk-reference-only.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  remove-vm-disk-reference-only.sh <VMID> <unusedN> [dryrun|--preflight]
+  remove-vm-disk-reference-only.sh <VMID> <active-slot> --active [dryrun|--preflight]
+
+DESCRIPTION
+  Removes exactly one QEMU config line without calling qm --delete or pvesm
+  free, so the backing volume cannot be freed as a side effect. VM must be
+  stopped and snapshot-free. Active-slot removal requires explicit --active.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

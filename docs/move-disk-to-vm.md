@@ -16,8 +16,9 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-move-disk-to-vm.sh 3.5.1 (project 3.5.1)
+move-disk-to-vm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   move-disk-to-vm.sh <full-lv-path> <destination-vmid> [pause|stop|restart] [dryrun]
@@ -50,18 +51,30 @@ EXAMPLES
   move-disk-to-vm.sh 123 0 456 pause dryrun
   move-disk-to-vm.sh restart 123 scsi0 456
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`move-disk-to-vm.sh.usage`](./move-disk-to-vm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `40-disk-lifecycle.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-disk-to-vm.sh" -O "move-disk-to-vm.sh" && chmod +x "move-disk-to-vm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/move-disk-to-vm.sh" -O "move-disk-to-vm.sh" && chmod +x "move-disk-to-vm.sh"
 ```
 
 ## Examples
@@ -80,7 +93,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-move-disk-to-vm.sh 3.5.1 (project 3.5.1)
+move-disk-to-vm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

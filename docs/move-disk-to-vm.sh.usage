@@ -1,4 +1,4 @@
-move-disk-to-vm.sh 3.5.1 (project 3.5.1)
+move-disk-to-vm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   move-disk-to-vm.sh <full-lv-path> <destination-vmid> [pause|stop|restart] [dryrun]
@@ -31,7 +31,10 @@ EXAMPLES
   move-disk-to-vm.sh 123 0 456 pause dryrun
   move-disk-to-vm.sh restart 123 scsi0 456
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

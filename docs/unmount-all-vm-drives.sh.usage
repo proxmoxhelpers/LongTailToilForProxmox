@@ -1,0 +1,32 @@
+unmount-all-vm-drives.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  unmount-all-vm-drives.sh <VMID> [mount-root] [dryrun|--preflight]
+
+DESCRIPTION
+  Safely removes the invocation-owned filesystems, partition mappings, temporary
+  LVM activations, and empty directories recorded by mount-vm-drive.sh or
+  mount-all-vm-drives.sh for the same VMID and mount root. The default mount
+  root is $PWD/vm-<VMID>.
+
+  The root-owned state file is required. Before the first unmount, every still
+  mounted target is verified to have the same canonical source recorded by the
+  mount invocation. Mapper cleanup is refused while a recorded partition remains
+  mounted, and unrelated mounts or resources are never selected recursively.
+
+ARGUMENTS
+  VMID         Numeric local QEMU VM ID.
+  mount-root   Root used by the matching mount command.
+               Default: $PWD/vm-<VMID>.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

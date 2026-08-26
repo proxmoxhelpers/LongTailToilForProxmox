@@ -1,0 +1,23 @@
+resize-vm-disk.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  resize-vm-disk.sh <VMID> <slot> <new-size|+increment> [dryrun|--preflight]
+  resize-vm-disk.sh --vmid VMID --slot SLOT --size SIZE [dryrun|--preflight]
+
+DESCRIPTION
+  Grow-only Proxmox disk resize for an LVM-backed QEMU disk. Absolute and
+  relative IEC sizes are validated before qm resize. The exact backing LV UUID
+  must survive and its resulting byte size must meet the requested target.
+  Partitions/filesystems are not changed; grow them separately when appropriate.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

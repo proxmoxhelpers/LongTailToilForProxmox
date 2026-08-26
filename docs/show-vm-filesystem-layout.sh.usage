@@ -1,0 +1,22 @@
+show-vm-filesystem-layout.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  show-vm-filesystem-layout.sh <VMID> [slot]
+
+DESCRIPTION
+  Read-only filesystem/partition map across all active disk slots on one QEMU
+  VM, or one exact slot. It never mounts or creates partition mapper devices.
+  Normal mode may temporarily activate an inactive LVM disk with -K and restores
+  it; dry-run/preflight refuses rather than changing activation state.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

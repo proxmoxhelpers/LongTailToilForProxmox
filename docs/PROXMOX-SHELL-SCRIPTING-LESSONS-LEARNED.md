@@ -1,6 +1,6 @@
 # Proxmox and Shell Scripting Lessons Learned
 
-This document captures lessons learned while developing and real-host testing the Proxmox LongTail Toil helpers. These are not abstract style preferences; most came from a real failure, rollback problem, fixture defect, or portability issue found during integration testing.
+This document captures lessons learned while developing and real-host testing the LongTailToilForProxmox helpers. These are not abstract style preferences; most came from a real failure, rollback problem, fixture defect, or portability issue found during integration testing.
 
 ## 1. Proxmox configuration deletion can also delete storage
 
@@ -464,6 +464,176 @@ run project helper       -> first actual qm set / pct set network mutation
 ```
 
 This gives failures the correct classification and log boundary.
+
+## Guiding principle
+
+For Proxmox storage automation, treat every name, config key, CLI flag and state transition as potentially carrying more semantics than it appears to.
+
+> Discover with the platform, identify with durable metadata, mutate narrowly, verify independently, and make rollback more conservative than the forward path.
+
+## 33. A "complete VM backup" is a claim that must be testable
+
+A native backup can still omit state by policy: excluded disks, unused volumes,
+external media and host resources may live outside the payload.
+
+**Lesson:** exact export should inventory those classes before backup and
+refuse when the resulting file would not be self-sufficient. A visible refusal
+is safer than a successful partial archive bearing an "exact" label.
+
+## 34. Virtual exactness is different from physical storage identity
+
+Restoring a VM to another host can reproduce the VMID, guest configuration,
+firewall configuration and every guest-visible disk byte while necessarily
+creating new LV UUIDs, allocation extents and device-mapper identities.
+
+**Lesson:** document the exactness boundary. Verify guest-visible content and
+configuration, but do not promise backend metadata that cannot or should not
+survive a portable restore.
+
+## 35. Hash the guest-visible disk, not merely an image container
+
+Two qcow2 files can represent identical virtual disks with different container
+bytes, metadata layout or allocation.
+
+**Lesson:** when proving portable VM-disk identity, hash the logical block
+content. For a regular image file, normalize it through a read-only conversion
+to raw (or an equivalent logical-content reader) before comparing with the
+restored block device.
+
+## 36. Cluster policy should not hitchhike into a guest restore
+
+ACLs, HA membership, pools and replication jobs affect cluster-wide objects and
+may reference nodes, users or resources that do not exist on the destination.
+
+**Lesson:** archive relevant lines as audit evidence if useful, but do not
+silently replay them as part of "restore the VM." Reapplying external policy
+deserves its own explicit, independently validated workflow.
+
+## 37. Verify a remote transfer before running restore logic
+
+`scp` returning zero proves the copy command succeeded; it does not prove the
+destination file is the exact file selected locally.
+
+**Lesson:** compute the complete archive SHA-256 locally and remotely, compare
+them, and only then execute restore. On failure retain the remote archive and
+journal/evidence instead of deleting the clues.
+
+## 38. High-level automation increases the importance of refusal
+
+A composed operation can amplify one bad assumption across every disk in a VM.
+
+**Lesson:** bulk migration, cloning and rebuild helpers should plan the whole
+operation before mutation, use stopped guests by default where topology changes
+span multiple devices, and retain completed resources when rollback cannot be
+proved.
+
+## 39. Testing new primitives and workflows requires different evidence
+
+A primitive can often be proven with one exact before/after assertion. A
+workflow needs evidence at each boundary: source identity, planned destination,
+intermediate resource, config transition, final identity, data equality and
+cleanup/rollback state.
+
+**Lesson:** organize integration groups by risk domain and make every mutating
+public helper pass an exact-state dry-run case in addition to representative
+real success/refusal coverage.
+
+## 40. Containment is not equality when verifying mounts
+
+A mount/unmount workflow initially verified success with `findmnt --target PATH`.
+After the guest filesystem had been unmounted, that lookup could still succeed
+because it returned the host filesystem *containing* `PATH`.
+
+**Lesson:** use an exact mountpoint predicate such as `findmnt -M PATH` when the
+postcondition is "this path itself is or is not a mountpoint." More generally,
+verify the exact relationship you intend rather than a broader containment or
+resolution relationship.
+
+## 41. Archive integrity is not archive authenticity
+
+A portable `.ltvm` archive can checksum every member and still be malicious if
+an attacker intentionally created the archive and its checksum list together.
+
+**Lesson:** validate archive paths/types/checksums before extraction or execution,
+but also treat the file as trusted input. SHA-256 proves accidental/tamper
+integrity relative to the included manifest; it is not a signature and does not
+identify who produced the archive.
+
+Reject before extraction:
+
+```text
+absolute/traversal paths
+duplicate members
+symlinks and hardlinks
+devices and FIFOs
+unchecked regular files
+invalid or duplicate checksum paths
+```
+
+## 42. Journal a mutation before verifying the mutation
+
+A multi-step repair originally recorded a completed LV rename only after its
+post-rename verification. If the rename succeeded but verification itself
+failed, rollback did not yet know that the rename had happened.
+
+**Lesson:** once a mutating command returns success, immediately record the
+durable identity needed to undo it, then run verification. The rollback journal
+must describe reality even when the next assertion is the thing that fails.
+
+For rename-heavy storage work, LV UUID is more durable than the current LV name.
+
+## 43. Inactive source handling belongs in composed workflows too
+
+Fixing inactive `base-*` copies in a low-level copy helper is not enough. A
+higher-level storage-clone workflow can eventually reach the same inactive LV
+through `pvesm path` and hand a nonexistent `/dev/VG/LV` node to another tool.
+
+**Lesson:** every block-reading workflow must independently preserve the source
+activation contract:
+
+```text
+discover size/identity from LVM metadata;
+remember whether the source was inactive;
+activate temporarily with activation-skip override only when required;
+perform the read/copy;
+restore inactivity on success, failure and signal cleanup;
+never change LV permission metadata merely to make it readable.
+```
+
+
+## 44. A green documentation test can still be too weak
+
+A source-documentation check that merely looks backward for *some* comment can
+mistake a section banner for a function comment. Likewise, a check that only
+searches for `Call:` somewhere in the accumulated comment buffer can give a
+false pass when the line belongs to another function.
+
+The stronger contract is structural:
+
+```text
+function-named header
+Call:/Usage: syntax when positional arguments are consumed
+descriptive line explaining behavior or invariant
+function definition
+```
+
+Static checks should delimit the immediately preceding comment block and handle
+both brace-bodied and subshell-bodied POSIX functions.
+
+## 45. Exact help snapshots can preserve stale help perfectly
+
+A byte-identical `.usage` snapshot proves synchronization, not completeness. If
+the live help says only `Usage: ...`, the snapshot can be perfectly current and
+still omit the script version, description, safety semantics, or common options.
+
+Test both dimensions:
+
+1. **content contract** — help contains the required public-interface sections;
+2. **synchronization contract** — snapshots and helper docs embed that exact help.
+
+This is why v3.6.1 tests `USAGE`, `DESCRIPTION`, common options, project/version
+identity, raw `.usage` equality, and per-helper documentation embedding
+separately.
 
 ## Guiding principle
 

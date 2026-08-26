@@ -1,0 +1,27 @@
+rebuild-vm-from-existing-disks.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  rebuild-vm-from-existing-disks.sh <VMID> [--name NAME] [--memory MiB] [--cores N] [--ovmf] [--apply] [dryrun|--preflight]
+
+DESCRIPTION
+  Discovers exactly named, unreferenced vm-VMID-disk-N/base-VMID-disk-N LVs,
+  proves a unique Proxmox storage mapping by LV UUID, rejects duplicate disk-N
+  candidates, and proposes a minimal recovery VM ordered by backing disk number.
+  It is plan-only unless --apply is used.
+
+  Hardware that cannot be inferred safely (NICs, exact machine/CPU/firmware)
+  is not guessed beyond the explicit defaults/options. If apply fails after the
+  new VM config is created, only that new config is eligible for cleanup and no
+  recovered storage volume is freed.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

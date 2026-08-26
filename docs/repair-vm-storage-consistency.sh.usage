@@ -1,0 +1,24 @@
+repair-vm-storage-consistency.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  repair-vm-storage-consistency.sh <VMID> [--apply] [dryrun|--preflight]
+
+DESCRIPTION
+  Conservative repair companion. It currently repairs only one class that can
+  be proven unambiguous: a referenced vm-/base- managed LV whose embedded VMID
+  differs from the referencing stopped, snapshot-free VM, while the exact
+  corrected LV name is unused and the physical LV has exactly one guest-storage
+  reference (storage aliases count as the same LV). Without --apply the command
+  is plan-only. Ambiguous findings are never guessed or automatically repaired.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

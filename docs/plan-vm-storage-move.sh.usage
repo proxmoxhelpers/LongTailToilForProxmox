@@ -1,0 +1,22 @@
+plan-vm-storage-move.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  plan-vm-storage-move.sh <VMID> <destination-storage> [--slot SLOT]
+
+DESCRIPTION
+  Read-only migration planner. Shows every selected disk, virtual byte count,
+  thin-pool/origin lineage and destination storage status before any move.
+  LVM sizes come from metadata, so inactive activation-skip/template LVs can be
+  planned without being activated. --slot requires an exact QEMU disk slot.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

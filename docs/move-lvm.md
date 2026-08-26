@@ -16,8 +16,9 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-move-lvm.sh 3.5.1 (project 3.5.1)
+move-lvm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   move-lvm.sh <source-lv-path> <destination-lv-path> [dryrun]
@@ -32,18 +33,30 @@ EXAMPLES
   move-lvm.sh /dev/thinvg/vm-123-disk-1 /dev/thinvg/vm-123-disk-1-old
   move-lvm.sh /dev/thinvg/vm-123-disk-1 /dev/fastvg/vm-123-disk-1
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`move-lvm.sh.usage`](./move-lvm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `20-lvm.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/move-lvm.sh" -O "move-lvm.sh" && chmod +x "move-lvm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/move-lvm.sh" -O "move-lvm.sh" && chmod +x "move-lvm.sh"
 ```
 
 ## Examples
@@ -62,7 +75,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-move-lvm.sh 3.5.1 (project 3.5.1)
+move-lvm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

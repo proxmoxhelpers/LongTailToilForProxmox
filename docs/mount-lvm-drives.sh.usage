@@ -1,0 +1,22 @@
+mount-lvm-drives.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  mount-lvm-drives.sh <lvm-volume-path> [mount-root] [--ro|--rw] [dryrun]
+
+DESCRIPTION
+  Exposes and mounts recognizable filesystems from an LVM block volume.
+  Partitioned media is mapped through kpartx; a filesystem directly on the LV
+  is mounted as part1. Read-only is the default.
+
+EXAMPLES
+  mount-lvm-drives.sh /dev/thinvg/vm-123-disk-1
+  mount-lvm-drives.sh /dev/thinvg/vm-123-disk-1 /mnt/vm123
+  mount-lvm-drives.sh /dev/thinvg/vm-123-disk-1 --rw
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

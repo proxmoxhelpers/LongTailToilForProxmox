@@ -1,6 +1,6 @@
 # POSIX Shell Programming Style Guide — Proxmox LVM Tools v3
 
-This guide defines the coding style for the v3-era Proxmox LongTail Toil shell helpers and their continued maintenance.
+This guide defines the coding style for the v3-era LongTailToilForProxmox shell helpers and their continued maintenance.
 
 The goals are to make every script easy to scan, internally documented, compact without becoming cryptic, conservative around destructive operations, and understandable independently even when common helpers are shared.
 
@@ -1109,6 +1109,203 @@ A script is not ready for v3 until all applicable items pass:
 - [ ] Test/cleanup code uses only explicitly available helpers and fail-closed ownership checks.
 
 ## 68. Guiding principle
+
+The v3 style should be readable at three levels:
+
+1. glance at `main()` and understand the operation;
+2. read headings and function documentation and understand safety/data flow;
+3. inspect function bodies and see compact POSIX shell implementing exactly what was promised.
+
+> Explicit structure, compact statements, documented intent, conservative mutation, and verifiable results.
+
+## 68. Verification predicates must match the exact postcondition
+
+A verification command is only useful when its lookup semantics exactly match the state being proved. Many system tools intentionally return a broader relationship than the caller first expects.
+
+For example:
+
+```sh
+findmnt --target /some/path
+```
+
+answers which filesystem contains that path. It does **not** prove that `/some/path` itself is a mountpoint. To verify an exact mountpoint, use the tool's exact-mount predicate where available, for example:
+
+```sh
+findmnt -M /some/path
+```
+
+Apply the same rule to storage and guest identity:
+
+```text
+pvesm path           resolves a volume ID; it does not prove ownership
+lvs metadata         proves an LV record; it does not prove an active block node
+qm/pct config        proves a config reference; it does not prove unique backing ownership
+command exit 0       proves the command accepted the operation; it does not prove every postcondition
+```
+
+When a lookup can legally return a parent, alias, stale reference or merely related object, add an exact independent postcondition rather than interpreting the broader lookup as equality.
+
+## 69. Public CLI modes have distinct operational meanings
+
+Use common spellings consistently:
+
+```text
+dryrun / --dryrun / --plan
+    Run real read-only preflight, print planned mutations, execute none.
+
+--preflight
+    Prefer a true preflight-only path for complex workflows: validate identities,
+    dependencies, topology, permissions and feasibility, then stop before
+    transaction construction. A legacy helper may temporarily treat this as a
+    dry-run alias, but documentation must say so rather than implying otherwise.
+
+--no-color
+    Convenience alias for NO_COLOR behavior.
+
+--quiet
+    Suppress routine informational/success chatter, never warnings or failures.
+```
+
+Do not let a presentation flag weaken validation or change target selection.
+
+## 70. Exit status is part of the automation API
+
+For new helpers, prefer the common convention:
+
+```text
+0  success / audit clean
+1  runtime or external-command failure
+2  command-line usage error
+3  safety refusal
+4  verification or audit finding
+```
+
+A read-only audit finding is not the same as a runtime failure. A deliberate
+safety refusal is not a usage typo. Keeping these distinct lets higher-level
+automation react without parsing human text.
+
+## 71. Machine-readable output must be structurally stable
+
+When an inspection helper offers `--json` or `--tsv`, keep human colour,
+headings and explanatory prose out of that stream. Field meaning should not
+depend on terminal width. Add fields compatibly where practical and document
+null/unknown values explicitly.
+
+## 72. Journal complex transactions
+
+Multi-step operations should create an operation journal that records durable
+identities, completed stages, preserved resources, rollback material and the
+final verified state. Journals belong outside `/etc/pve` and must never be
+required for correctness; they are evidence and recovery aids.
+
+A journal must not contain secrets merely because a command line happened to
+contain them.
+
+## 73. Do not use eval for bulk dispatch
+
+A helper that accepts another command must preserve the caller's argument
+boundaries and perform constrained substitution only. For example, replace an
+argument that is exactly `{}` with a VMID.
+
+Do not rebuild a command string and feed it to `eval`, `sh -c`, or equivalent
+unless executing shell language is the explicit purpose of the tool.
+
+## 74. Separate block growth, partition growth and filesystem growth
+
+These are different transactions:
+
+```text
+virtual disk / LV growth
+partition-table growth
+filesystem growth
+```
+
+Completing one does not prove the next is safe. Grow-only primitives should
+refuse shrink syntax. Filesystem helpers should support only filesystems and
+topologies for which postconditions can be proved; otherwise report the next
+manual step.
+
+## 75. A portable backup must fail closed on non-portable state
+
+"Whole VM in one file" means the exporter must identify state that is not
+actually contained in that file. Examples include excluded (`backup=0`) disks,
+unused backing volumes, host passthrough resources, bind mounts and external
+ISO media.
+
+The safe response is refusal or an explicitly non-exact mode, never silently
+calling an incomplete archive "identical."
+
+For portable VM archives, distinguish:
+
+```text
+guest-visible virtual identity/configuration/content
+physical backend identity (LV UUID, pool allocation, device mapper IDs)
+cluster policy outside the guest config (ACL/HA/pool/replication)
+```
+
+Only promise the first category when it is fully captured and verified.
+
+## 76. Remote restore is a transfer plus a restore transaction
+
+A one-operation sender must:
+
+1. identify the exact local archive;
+2. transfer it without shell interpolation of an untrusted target path;
+3. compare a complete archive digest on the destination;
+4. execute only the restore program verified as part of the archive;
+5. leave recovery evidence on failure;
+6. remove the remote archive only after successful restore unless the user
+   explicitly asks to retain it.
+
+The destination should not need a matching checkout merely to restore a
+self-contained archive.
+
+## 77. High-level workflows compose verified primitives
+
+A higher-level helper may orchestrate several low-level actions, but it must
+not erase their safety boundaries. Before the first mutation, build a complete
+plan. After each irreversible boundary, record enough durable identity to
+continue verification or conservative rollback.
+
+If rollback cannot recreate the original state with equal confidence, preserve
+the affected resources and stop for operator inspection instead of guessing.
+
+
+## 78. Source comments, help, usage snapshots, and helper docs are one interface
+
+Public source documentation is not decorative metadata. Treat these four views as
+the same interface expressed at different levels:
+
+```text
+function comment block
+live --help output
+docs/<script>.sh.usage
+docs/<script>.md
+```
+
+For every public helper:
+
+- each top-level function has a function-named comment header and a concise
+  description of what it does or what invariant it protects;
+- every function that consumes positional arguments includes explicit `Call:`
+  syntax (or the sanctioned full-form `Usage:` field) in that same comment block;
+- `--help` identifies the script version and project version, and exposes at
+  least `USAGE`, `DESCRIPTION`, and the common CLI options;
+- the raw `.usage` snapshot is generated from live `--help`, never maintained as
+  a second hand-written source of truth;
+- the per-helper Markdown page embeds that exact live help, links the raw usage
+  file and script, and names the integration group/coverage for the helper;
+- static tests compare these representations so a script change cannot leave the
+  docs green while the interface has drifted.
+
+A section banner is not a function comment. A lone `Call:` line is not a
+description. Conversely, do not turn trivial helpers into essays: the compact
+three-line form is preferred when it communicates the contract clearly.
+
+When help text changes, regenerate both the `.usage` snapshot and the embedded
+help block in the helper documentation in the same change.
+
+## 79. Guiding principle
 
 The v3 style should be readable at three levels:
 

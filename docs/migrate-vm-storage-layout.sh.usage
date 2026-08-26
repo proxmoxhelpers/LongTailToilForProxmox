@@ -1,0 +1,26 @@
+migrate-vm-storage-layout.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  migrate-vm-storage-layout.sh <VMID> <destination-storage> [--slot SLOT] [dryrun|--preflight]
+
+DESCRIPTION
+  Migrates one or all active disks of a stopped, snapshot-free QEMU VM using
+  qm move_disk. SLOT, when supplied, must be an exact QEMU disk slot. Each
+  successful move is verified to use the destination storage. If execution is
+  interrupted or a later move/verification fails, selected disks that reached
+  the destination are best-effort moved back in reverse order to their recorded
+  recorded original storages. A rollback can create a different physical LV identity even
+  though Proxmox copies the disk content back, so any rollback warning requires
+  operator inspection before retrying.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

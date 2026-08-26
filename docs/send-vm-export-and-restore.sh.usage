@@ -1,0 +1,43 @@
+send-vm-export-and-restore.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  send-vm-export-and-restore.sh <archive.ltvm> <root@proxmoxhost>
+      [--vmid NEWID] [--storage STORAGE] [--start]
+      [--no-content-verify] [--remote-path PATH] [--keep-remote]
+      [dryrun|--preflight]
+
+DESCRIPTION
+  One-operation transfer + restore. The archive is copied with scp, its complete
+  SHA-256 is compared on the destination, then the restore program embedded in
+  the archive is streamed over SSH and executed as root. The destination does
+  not need this repository or import-vm.sh installed.
+
+PREFLIGHT
+  Dry-run validates the local archive and prints the remote actions without
+  opening SSH or changing local/remote state. --preflight contacts the
+  destination over SSH and checks root identity, required Proxmox restore
+  commands, remote-directory writability, and that the requested remote archive
+  path is absent. Preflight requires the host key to be already trusted and
+  will not add a new key to known_hosts. It transfers nothing and starts no
+  restore. Real execution atomically reserves the absent path before scp, so
+  an existing remote file or symlink is never silently overwritten.
+
+FAILURE BEHAVIOR
+  A failed verification/restore leaves the transferred archive on the remote
+  host for diagnosis. Successful restores remove it unless --keep-remote is set.
+
+TRUST
+  Send/restore only .ltvm files from a trusted source. Checksums verify archive
+  integrity but are not a signature or creator-authentication mechanism.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

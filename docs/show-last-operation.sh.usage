@@ -1,0 +1,22 @@
+show-last-operation.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  show-last-operation.sh [operation-id]
+
+DESCRIPTION
+  Displays the most recent LongTail transaction journal, or a specific journal
+  by operation ID. The journal root and selected file must be root-owned and
+  non-symlink regular storage. Set LONGTAILTOIL_JOURNAL_DIR to inspect a
+  non-default root.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
