@@ -1,10 +1,10 @@
-create-disk-snapshot-and-overwrite-disk-on-vm.sh 3.5.1 (project 3.5.1)
+create-disk-snapshot-and-overwrite-disk-on-vm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-lv-path> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-vmid> <source-disk-N|source-slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-vmid> <source-disk-N|source-slot> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-lv-path> <dest-vmid> <dest-N|dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-vmid> <N|source-disk-N|source-slot|unusedN> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  create-disk-snapshot-and-overwrite-disk-on-vm.sh <source-vmid> <N|source-disk-N|source-slot|unusedN> <dest-vmid> <dest-N|dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
 
 DESCRIPTION
   Creates an LVM-thin snapshot from the source and places it on the requested destination
@@ -13,12 +13,17 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path.
-  <source-vmid> disk-N  Resolve a managed vm-/base- backing volume.
+  <source-vmid> N|disk-N  Resolve a managed vm-/base- backing volume.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  <source-vmid> unusedN Resolve an exact detached/unused storage-backed disk reference.
   Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
 
 DESTINATION SELECTORS
-  disk-N       Target that backing disk number. If absent, create it on first free SCSI.
+  <destination-lv-path>
+               Must resolve to an LVM LV attached as exactly one active disk
+               on exactly one QEMU VM. Zero or multiple active QEMU references
+               are refused; unusedN-only references do not select a destination.
+  N or disk-N  Target that backing disk number. If absent, create it on first free SCSI.
   sata0        Use exactly sata0; replace it if occupied, create there if empty.
   ide2         Use exactly ide2.
   scsi4        Use exactly scsi4.
@@ -52,7 +57,10 @@ EXAMPLES
   create-disk-snapshot-and-overwrite-disk-on-vm.sh /dev/pve/vm-123-disk-0 456 scsi4 pause dryrun
   create-disk-snapshot-and-overwrite-disk-on-vm.sh /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 delete dryrun
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

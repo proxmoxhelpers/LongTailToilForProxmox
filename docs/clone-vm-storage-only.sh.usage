@@ -1,0 +1,36 @@
+clone-vm-storage-only.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  clone-vm-storage-only.sh <source-VMID> <destination-VMID> [--storage STORAGE] [--hot] [dryrun|--preflight]
+
+DESCRIPTION
+  Copies every active source disk into an existing destination QEMU VM, keeping
+  the same device slots and disk options. The destination must be stopped and
+  snapshot-free because generated unusedN entries are removed config-only.
+
+  The source must also be stopped unless --hot explicitly accepts a
+  non-quiesced copy. Each source is first converted to an invocation-owned
+  temporary raw staging image, because qm importdisk requires a regular image
+  file rather than an LVM block device. The imported guest-visible bytes are
+  verified against that immutable staging image before attachment.
+
+  In --hot mode the source may change while the staging image is created, so
+  exact source post-copy equality is intentionally not claimed. Temporary
+  staging data is removed on success and failure; set TMPDIR to a filesystem
+  with sufficient temporary capacity for the largest source disk.
+
+  Any abnormal exit after the first import restores the destination config from
+  its backup. Imported storage is cleaned only when its recorded physical
+  identity still matches and no guest physically references it.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

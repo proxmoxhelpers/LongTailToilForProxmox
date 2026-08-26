@@ -1,0 +1,27 @@
+export-vm-filesystem.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  export-vm-filesystem.sh <VMID> <slot> <output.tar[.gz|.zst]> [--partition N] [--force] [dryrun|--preflight]
+
+DESCRIPTION
+  Exports one filesystem from a stopped QEMU VM through a private host mount.
+  Partitioned disks require an explicit partition number. ext3/4 use noload and
+  XFS uses norecovery so the read-only mount cannot replay guest recovery data.
+  Mapper ownership and exact mount source are verified; output is staged and
+  atomically committed only after a complete archive is created; without --force an
+  output path that appears concurrently is never overwritten. An inactive LVM
+  disk may be temporarily activated in normal mode and is restored on every
+  exit path; dry-run/preflight never activates it. Temporary mounts/mappings
+  are removed on every exit path.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

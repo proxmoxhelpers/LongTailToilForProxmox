@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Create and byte-verify an independent copy using a destination backing disk number, exact slot, or first-free bus; replace/archive an occupied exact target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion. `pause` replacement of a running SCSI target is preflight-refused when Proxmox would need to remove a per-disk or last SCSI controller.
+Create and byte-verify an independent copy using a destination backing disk number, exact slot, first-free bus, or an LV path that must have exactly one active QEMU reference; replace/archive an occupied target or create into an empty slot, with optional `delete`, VM-state handling, and `boot` promotion. `pause` replacement of an unsafe SCSI topology is refused before mutation.
 
 ## Usage
 
@@ -16,14 +16,15 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-create-disk-copy-and-overwrite-disk-on-vm.sh 3.5.1 (project 3.5.1)
+create-disk-copy-and-overwrite-disk-on-vm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   create-disk-copy-and-overwrite-disk-on-vm.sh <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  create-disk-copy-and-overwrite-disk-on-vm.sh <source-lv-path> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  create-disk-copy-and-overwrite-disk-on-vm.sh <source-vmid> <source-disk-N|source-slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  create-disk-copy-and-overwrite-disk-on-vm.sh <source-vmid> <source-disk-N|source-slot> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  create-disk-copy-and-overwrite-disk-on-vm.sh <source-lv-path> <dest-vmid> <dest-N|dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  create-disk-copy-and-overwrite-disk-on-vm.sh <source-vmid> <N|source-disk-N|source-slot|unusedN> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  create-disk-copy-and-overwrite-disk-on-vm.sh <source-vmid> <N|source-disk-N|source-slot|unusedN> <dest-vmid> <dest-N|dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
 
 DESCRIPTION
   Creates an independent copy from the source and places it on the requested destination
@@ -32,12 +33,17 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path.
-  <source-vmid> disk-N  Resolve a managed vm-/base- backing volume.
+  <source-vmid> N|disk-N  Resolve a managed vm-/base- backing volume.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  <source-vmid> unusedN Resolve an exact detached/unused storage-backed disk reference.
   Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
 
 DESTINATION SELECTORS
-  disk-N       Target that backing disk number. If absent, create it on first free SCSI.
+  <destination-lv-path>
+               Must resolve to an LVM LV attached as exactly one active disk
+               on exactly one QEMU VM. Zero or multiple active QEMU references
+               are refused; unusedN-only references do not select a destination.
+  N or disk-N  Target that backing disk number. If absent, create it on first free SCSI.
   sata0        Use exactly sata0; replace it if occupied, create there if empty.
   ide2         Use exactly ide2.
   scsi4        Use exactly scsi4.
@@ -76,18 +82,30 @@ EXAMPLES
   create-disk-copy-and-overwrite-disk-on-vm.sh /dev/pve/vm-123-disk-0 456 scsi4 pause dryrun
   create-disk-copy-and-overwrite-disk-on-vm.sh /dev/pve/vm-123-disk-0 /dev/pve/vm-456-disk-1 delete dryrun
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`create-disk-copy-and-overwrite-disk-on-vm.sh.usage`](./create-disk-copy-and-overwrite-disk-on-vm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `50-copy-snapshot.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-overwrite-disk-on-vm.sh" -O "create-disk-copy-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-copy-and-overwrite-disk-on-vm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/create-disk-copy-and-overwrite-disk-on-vm.sh" -O "create-disk-copy-and-overwrite-disk-on-vm.sh" && chmod +x "create-disk-copy-and-overwrite-disk-on-vm.sh"
 ```
 
 ## Examples
@@ -106,7 +124,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-create-disk-copy-and-overwrite-disk-on-vm.sh 3.5.1 (project 3.5.1)
+create-disk-copy-and-overwrite-disk-on-vm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

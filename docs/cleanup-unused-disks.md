@@ -4,7 +4,7 @@
 
 ## Purpose
 
-List or delete selected/all `unusedN` disks from a QEMU VM with shared-reference checks.
+List `unusedN` disks on a QEMU VM, or—when the VM is stopped—delete selected/all unused disks with shared-reference checks.
 
 ## Usage
 
@@ -16,20 +16,46 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-Usage: cleanup-unused-disks.sh <vmid> [unusedN ... | --all] [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+cleanup-unused-disks.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  cleanup-unused-disks.sh <vmid> [unusedN ... | --all] [dryrun]
+
+DESCRIPTION
+  With no unusedN/--all selector, lists the VM's unused disk references.
+  With explicit unusedN keys or --all, permanently deletes the selected
+  backing volumes and removes their unusedN references.
+
+SAFETY
+  Listing is read-only and does not require the VM to be stopped.
+  Deletion requires the QEMU VM to be stopped and refuses shared volumes.
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`cleanup-unused-disks.sh.usage`](./cleanup-unused-disks.sh.usage).
+
+## Test coverage
+
+- Integration reference: `40-disk-lifecycle.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/cleanup-unused-disks.sh" -O "cleanup-unused-disks.sh" && chmod +x "cleanup-unused-disks.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/cleanup-unused-disks.sh" -O "cleanup-unused-disks.sh" && chmod +x "cleanup-unused-disks.sh"
 ```
 
 ## Examples
@@ -48,7 +74,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-cleanup-unused-disks.sh 3.5.1 (project 3.5.1)
+cleanup-unused-disks.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

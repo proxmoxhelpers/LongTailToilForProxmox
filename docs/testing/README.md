@@ -85,9 +85,21 @@ Shell-control-flow and harness-engineering guidance covering `set -e`, return-co
 
 A concise pre-run, fixture, per-case, cleanup and release-gate checklist for any integration suite that creates, renames, mounts or deletes system resources.
 
+## Current project status
+
+For project **v3.7.1 / suite v3.1.1**, the harness covers **81 public commands**.
+The static/CLI group passes **78/78** cases, and the 2026-08-22 real-Proxmox
+acceptance run passes **137/137** operational cases across all 14 integration
+groups with zero failures, skips or anomalies. The exact acceptance record is
+[`../V3.7.1-REAL-INTEGRATION-RESULTS.md`](../V3.7.1-REAL-INTEGRATION-RESULTS.md).
+
+The sections below preserve the historical evolution of the harness. Counts and
+the word "current" inside version-specific historical records refer to the release
+being discussed, not the present v3.7.1 command surface.
+
 ## v3.4.2 harness hardening
 
-The current integration harness adds several fail-closed protections beyond the original design:
+The v3.4.2 harness line added several fail-closed protections beyond the original design:
 
 - every mutating public helper must have an integration dry-run whose before/after disposable-state snapshots are identical;
 - dry-run/refusal snapshots include LV metadata, sampled LV bytes, guest config and runtime state, temporary storage definitions, files and test-directory mounts;
@@ -97,7 +109,7 @@ The current integration harness adds several fail-closed protections beyond the 
 - pre-existing backup paths are recorded and never removed by test cleanup;
 - a loopback-owned regular VG exercises full-write copy behavior separately from LVM-thin sparse-copy behavior.
 
-The 42-command v3.4.4 suite contains 86 real integration cases. That is a test definition, not a validation claim: it still requires a fresh real-Proxmox run with zero failures and zero protected-state anomalies before the release is called integration-validated.
+The later 42-command v3.4.4 suite contained 86 real integration cases. That was a test definition, not a validation claim: it still required a fresh real-Proxmox run with zero failures and zero protected-state anomalies before that release could be called integration-validated.
 
 ## Lessons that motivated these guides
 

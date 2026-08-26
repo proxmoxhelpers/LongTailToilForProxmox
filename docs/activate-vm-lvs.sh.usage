@@ -1,0 +1,22 @@
+activate-vm-lvs.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  activate-vm-lvs.sh <VMID> [dryrun|--preflight]
+
+DESCRIPTION
+  Activates distinct LVM volumes referenced by one guest using lvchange -ay -K
+  so activation-skip template/base LVs can be exposed. Storage aliases are
+  deduplicated by LV UUID. Already-active LVs are unchanged, and a partial
+  multi-LV activation is rolled back on failure. No guest config is modified.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

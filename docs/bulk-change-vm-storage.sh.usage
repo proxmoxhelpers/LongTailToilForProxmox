@@ -1,5 +1,20 @@
-Usage: bulk-change-vm-storage.sh <source-storage> <destination-storage> <vmid>... [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+bulk-change-vm-storage.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  bulk-change-vm-storage.sh <source-storage> <destination-storage> <vmid>... [dryrun]
+
+DESCRIPTION
+  Moves every matching active QEMU disk on the listed VMIDs from one
+  configured Proxmox storage ID to another using Proxmox storage migration. At
+  least one VMID is required.
+
+EXAMPLES
+  bulk-change-vm-storage.sh local-lvm fast-lvm 101 102
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

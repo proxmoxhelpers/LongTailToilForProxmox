@@ -1,0 +1,27 @@
+compare-vm-disks.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  compare-vm-disks.sh <disk-A> <disk-B> [--full] [--preflight] [--no-color]
+
+SELECTORS
+  /dev/VG/LV
+  VMID:SLOT          for example 123:scsi0
+
+DESCRIPTION
+  Compares size and the SHA-256 of the first 4 MiB. --full additionally runs
+  a complete byte-for-byte cmp. In normal mode an inactive LVM source may be
+  temporarily activated with -K and is restored on every exit path; dry-run/
+  preflight never activates an LV and refuses when content cannot be read.
+  Exit 4 means the compared disks differ.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

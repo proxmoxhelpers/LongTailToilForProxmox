@@ -2,7 +2,7 @@
 
 Repository:
 
-`proxmoxhelpers/Proxmox-LongTailToil`
+`proxmoxhelpers/LongTailToilForProxmox`
 
 ## Recommended GitHub About text
 
@@ -45,8 +45,8 @@ From the repository root:
 git init
 git branch -M main
 git add .
-git commit -m "Initial public release: Proxmox LongTail Toil v3.1.0"
-git remote add origin https://github.com/proxmoxhelpers/Proxmox-LongTailToil.git
+git commit -m "Initial public release: LongTailToilForProxmox v3.1.0"
+git remote add origin https://github.com/proxmoxhelpers/LongTailToilForProxmox.git
 git push -u origin main
 ```
 
@@ -61,7 +61,7 @@ v3.1.0
 Title:
 
 ```text
-Proxmox LongTail Toil v3.1.0
+LongTailToilForProxmox v3.1.0
 ```
 
 Short release summary:
@@ -71,7 +71,7 @@ Short release summary:
 Suggested commands:
 
 ```sh
-git tag -a v3.1.0 -m "Proxmox LongTail Toil v3.1.0"
+git tag -a v3.1.0 -m "LongTailToilForProxmox v3.1.0"
 git push origin v3.1.0
 ```
 

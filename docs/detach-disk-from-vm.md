@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Detach a VM disk slot while preserving the backing volume as an `unusedN` entry.
+Detach a disk slot from a stopped QEMU VM while preserving the backing volume as an `unusedN` entry.
 
 ## Usage
 
@@ -16,20 +16,44 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-Usage: detach-disk-from-vm.sh <vmid> <disk-slot> [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+detach-disk-from-vm.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  detach-disk-from-vm.sh <vmid> <disk-slot> [dryrun]
+
+DESCRIPTION
+  Detaches an active disk slot from a QEMU VM without deleting its backing
+  volume. Proxmox preserves the detached volume as an unusedN reference.
+
+SAFETY
+  The VM must be stopped.
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`detach-disk-from-vm.sh.usage`](./detach-disk-from-vm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `40-disk-lifecycle.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/detach-disk-from-vm.sh" -O "detach-disk-from-vm.sh" && chmod +x "detach-disk-from-vm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/detach-disk-from-vm.sh" -O "detach-disk-from-vm.sh" && chmod +x "detach-disk-from-vm.sh"
 ```
 
 ## Examples
@@ -48,7 +72,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-detach-disk-from-vm.sh 3.5.1 (project 3.5.1)
+detach-disk-from-vm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

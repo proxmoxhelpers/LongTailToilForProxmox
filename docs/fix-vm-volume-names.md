@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Repair managed backing LV names whose embedded VMID does not match the referencing guest, including normal disks, `unusedN`, EFI and TPM state volumes; preserve `vm-` vs `base-` and the original `disk-N`, and refuse an exact corrected-name collision instead of silently choosing another number.
+On a stopped QEMU VM, repairs already-managed `vm-*`/`base-*` backing LV names whose embedded VMID does not match the referencing guest, preserving family and the original `disk-N`. Only configured managed-name references are repair candidates; unrelated custom/unmanaged LVs are never scanned or renamed. Shared volumes and exact corrected-name collisions are refused.
 
 ## Usage
 
@@ -16,22 +16,49 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-Usage: fix-vm-volume-names.sh <vmid> [dryrun]
-Correct mismatched vm-ID-disk-N / base-ID-disk-N backing names while preserving family and disk-N.
-Includes normal disks, unusedN, efidiskN and tpmstateN references. Exact managed-name collisions are refused.
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+fix-vm-volume-names.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  fix-vm-volume-names.sh <vmid> [dryrun]
+
+DESCRIPTION
+  Corrects LVM-backed managed names whose embedded VMID does not match the
+  referencing QEMU VM, preserving vm-/base- family and the original disk-N.
+
+  Normal disks, unusedN, efidiskN and tpmstateN references are inspected.
+  Only configured vm-/base-...-disk-N names are repair candidates. Unrelated
+  custom/unmanaged LVs are never scanned or renamed.
+
+SAFETY
+  The VM must be stopped. Shared volumes and exact corrected-name collisions
+  are refused before mutation.
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`fix-vm-volume-names.sh.usage`](./fix-vm-volume-names.sh.usage).
+
+## Test coverage
+
+- Integration reference: `60-disk-config.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/fix-vm-volume-names.sh" -O "fix-vm-volume-names.sh" && chmod +x "fix-vm-volume-names.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/fix-vm-volume-names.sh" -O "fix-vm-volume-names.sh" && chmod +x "fix-vm-volume-names.sh"
 ```
 
 ## Examples
@@ -50,7 +77,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-fix-vm-volume-names.sh 3.5.1 (project 3.5.1)
+fix-vm-volume-names.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

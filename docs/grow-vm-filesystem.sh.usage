@@ -1,0 +1,24 @@
+grow-vm-filesystem.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  grow-vm-filesystem.sh </dev/VG/LV|VMID:SLOT> [--mountpoint PATH] [dryrun|--preflight]
+
+DESCRIPTION
+  Grows a filesystem only after the block device has already been enlarged.
+  VMID:SLOT requires a stopped QEMU VM. A direct LVM selector is refused when
+  its physical LV UUID is guest-referenced, because guest runtime state cannot
+  otherwise be proven. The device must already be active. This version handles
+  whole-device ext2/3/4 while unmounted and mounted XFS at an exact source-
+  verified --mountpoint. Partition-table growth is deliberately refused.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

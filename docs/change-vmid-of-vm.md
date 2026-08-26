@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Change the VMID of a stopped local QEMU VM or LXC container on LVM/LVM-thin, renaming both `vm-OLDID-*` and template `base-OLDID-*` volumes while preserving their family, with preflight checks, backup, verification and rollback.
+Change the VMID of a local QEMU VM or LXC container on LVM/LVM-thin, stopping a running guest first, renaming both `vm-OLDID-*` and template `base-OLDID-*` volumes while preserving their family, and intentionally leaving the renamed guest stopped after preflight, backup, verification and rollback protection.
 
 ## Usage
 
@@ -16,8 +16,9 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-change-vmid-of-vm.sh 3.5.1 (project 3.5.1)
+change-vmid-of-vm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   change-vmid-of-vm.sh <old-vmid> <new-vmid> [dryrun]
@@ -27,7 +28,9 @@ DESCRIPTION
   vm-OLDID-* / base-OLDID-* storage volumes are LVM/LVM-thin and can be renamed in place.
 
   Preflight checks destination VMID availability, locks, snapshots, volume
-  ownership and name collisions before mutation. The guest is left stopped.
+  ownership and name collisions before mutation. A running guest is asked to
+  shut down gracefully and is force-stopped only if necessary. The renamed
+  guest is intentionally left stopped.
 
 EXAMPLE
   change-vmid-of-vm.sh 123 456
@@ -36,18 +39,30 @@ NOTES
   HA, replication, ACLs, backup jobs, pools, hooks and external automation are
   not rewritten automatically and must be reviewed after a successful change.
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`change-vmid-of-vm.sh.usage`](./change-vmid-of-vm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `80-vm-config.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/change-vmid-of-vm.sh" -O "change-vmid-of-vm.sh" && chmod +x "change-vmid-of-vm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/change-vmid-of-vm.sh" -O "change-vmid-of-vm.sh" && chmod +x "change-vmid-of-vm.sh"
 ```
 
 ## Examples
@@ -66,7 +81,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-change-vmid-of-vm.sh 3.5.1 (project 3.5.1)
+change-vmid-of-vm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

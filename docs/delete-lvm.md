@@ -16,30 +16,45 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-delete-lvm.sh 3.5.1 (project 3.5.1)
+delete-lvm.sh 3.7.1 (project 3.7.1)
 
 USAGE
   delete-lvm.sh <lvm-volume-path> [dryrun]
 
-EXAMPLE
-  delete-lvm.sh /dev/thinvg/vm-123-disk-1-copy
+DESCRIPTION
+  Deletes one exact LVM logical volume after showing its metadata and
+  requiring the literal DELETE confirmation. Dry-run simulates confirmation
+  and deletion; cancellation returns failure.
 
-LIST VOLUMES
-  lvs --noheadings -o lv_path | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+EXAMPLES
+  delete-lvm.sh /dev/pve/vm-123-disk-0-old
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`delete-lvm.sh.usage`](./delete-lvm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `20-lvm.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/delete-lvm.sh" -O "delete-lvm.sh" && chmod +x "delete-lvm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/delete-lvm.sh" -O "delete-lvm.sh" && chmod +x "delete-lvm.sh"
 ```
 
 ## Examples
@@ -58,7 +73,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-delete-lvm.sh 3.5.1 (project 3.5.1)
+delete-lvm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

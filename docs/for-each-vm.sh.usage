@@ -1,0 +1,32 @@
+for-each-vm.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  for-each-vm.sh [filters] -- COMMAND [ARG ...]
+  for-each-vm.sh --range 100-199 --running -- ./audit-vm-storage.sh {}
+  for-each-vm.sh --tag production --type qemu -- COMMAND {}
+
+FILTERS
+  --range MIN-MAX
+  --running | --stopped
+  --type qemu|lxc|all
+  --tag TAG
+
+DESCRIPTION
+  Safely dispatches a command to selected guests without eval. An argument that
+  is exactly {} is replaced by the VMID; if no {} is present the command is run
+  exactly as supplied. The argv template is stored one argument per line, so
+  command arguments containing newlines are refused. Range/tag filters are
+  fully validated before the first dispatch. dryrun/--plan prints argv and
+  executes nothing.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

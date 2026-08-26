@@ -1,0 +1,24 @@
+find-shared-vm-volumes.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  find-shared-vm-volumes.sh [--json|--tsv]
+
+DESCRIPTION
+  Read-only inventory of storage physically referenced by more than one local
+  QEMU/LXC guest config. LVM references are grouped by LV UUID, so different
+  Proxmox storage aliases to the same LV are detected as shared. Non-LVM
+  references are grouped by canonical backing path when resolvable. Output
+  includes the physical identity, all observed Proxmox volume IDs, and every
+  guest/slot reference.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

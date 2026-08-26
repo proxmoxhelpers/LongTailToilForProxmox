@@ -1,0 +1,22 @@
+find-vm-root-filesystem.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  find-vm-root-filesystem.sh <VMID>
+
+DESCRIPTION
+  Finds Linux-filesystem signature candidates across a VM's disks without
+  mounting them. It reports slot/partition/offset/size but does not claim which
+  candidate actually contains /. Normal mode may temporarily activate inactive
+  LVM disks with -K and restores them; dry-run/preflight never activates them.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

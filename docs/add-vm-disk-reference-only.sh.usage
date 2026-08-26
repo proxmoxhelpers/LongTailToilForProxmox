@@ -1,0 +1,22 @@
+add-vm-disk-reference-only.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  add-vm-disk-reference-only.sh <VMID> <slot> <storage:volume> [--options OPTIONS] [--allow-shared] [dryrun|--preflight]
+
+DESCRIPTION
+  Adds exactly one QEMU config reference directly after validating the backing
+  volume. It never allocates, copies or frees storage. VM must be stopped and
+  snapshot-free. Existing physical-LV references, including storage aliases,
+  are refused unless --allow-shared is explicit.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

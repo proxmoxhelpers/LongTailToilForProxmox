@@ -1,0 +1,21 @@
+convert-lv-to-thin.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  convert-lv-to-thin.sh <source-LV> <destination-VG> [new-LV-name] [--pool POOL] [dryrun|--preflight]
+
+DESCRIPTION
+  Creates a new independent thin LV, copies all source bytes using sparse writes
+  only because the destination is thin, and verifies with cmp. Source is never
+  deleted or converted in place.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

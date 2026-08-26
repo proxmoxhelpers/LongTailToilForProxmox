@@ -1,5 +1,20 @@
-Usage: clone-single-vm-disk.sh <vmid> <disk-slot> [destination-vg] [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+clone-single-vm-disk.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  clone-single-vm-disk.sh <vmid> <disk-slot> [destination-vg] [dryrun]
+
+DESCRIPTION
+  Creates an independent verified copy of one active QEMU disk and attaches
+  the copy back to the same VM. The source is selected by an exact disk slot;
+  destination-vg is optional.
+
+EXAMPLES
+  clone-single-vm-disk.sh 123 scsi0 pve
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

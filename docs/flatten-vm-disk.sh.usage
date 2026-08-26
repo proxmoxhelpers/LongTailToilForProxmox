@@ -1,0 +1,24 @@
+flatten-vm-disk.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  flatten-vm-disk.sh <VMID> <slot> [dryrun|--preflight]
+
+DESCRIPTION
+  Replaces an LVM-thin snapshot/clone disk with an independent thin copy in the
+  same pool. The VM must be stopped and its config must not contain snapshots.
+  The original linked volume is preserved as an unusedN entry. New content and
+  the new LV identity are verified before the slot is changed. If a later step
+  fails, the original slot is restored and only the UUID-proven incomplete LV
+  created by this invocation is eligible for cleanup.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

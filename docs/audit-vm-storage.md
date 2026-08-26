@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Audit a VM's storage references for missing paths, bad mappings and unexpected references.
+Audit a local QEMU VM or LXC container's storage-backed references for missing paths, bad mappings and unexpected cross-guest references.
 
 ## Usage
 
@@ -16,20 +16,45 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-Usage: audit-vm-storage.sh <vmid> [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+audit-vm-storage.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  audit-vm-storage.sh <vmid> [dryrun]
+
+DESCRIPTION
+  Audits storage-backed references for a local QEMU VM or LXC container.
+  Every referenced volume must resolve through Proxmox storage, and a volume
+  referenced by another guest is reported as a failed audit.
+
+SAFETY
+  Read-only. The command elevates before inspecting host/cluster storage state.
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`audit-vm-storage.sh.usage`](./audit-vm-storage.sh.usage).
+
+## Test coverage
+
+- Integration reference: `10-inspection.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/audit-vm-storage.sh" -O "audit-vm-storage.sh" && chmod +x "audit-vm-storage.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/audit-vm-storage.sh" -O "audit-vm-storage.sh" && chmod +x "audit-vm-storage.sh"
 ```
 
 ## Examples
@@ -48,7 +73,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-audit-vm-storage.sh 3.5.1 (project 3.5.1)
+audit-vm-storage.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

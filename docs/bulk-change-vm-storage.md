@@ -16,20 +16,45 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-Usage: bulk-change-vm-storage.sh <source-storage> <destination-storage> <vmid>... [dryrun]
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+bulk-change-vm-storage.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  bulk-change-vm-storage.sh <source-storage> <destination-storage> <vmid>... [dryrun]
+
+DESCRIPTION
+  Moves every matching active QEMU disk on the listed VMIDs from one
+  configured Proxmox storage ID to another using Proxmox storage migration. At
+  least one VMID is required.
+
+EXAMPLES
+  bulk-change-vm-storage.sh local-lvm fast-lvm 101 102
+
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`bulk-change-vm-storage.sh.usage`](./bulk-change-vm-storage.sh.usage).
+
+## Test coverage
+
+- Integration reference: `70-storage-io.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/bulk-change-vm-storage.sh" -O "bulk-change-vm-storage.sh" && chmod +x "bulk-change-vm-storage.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/bulk-change-vm-storage.sh" -O "bulk-change-vm-storage.sh" && chmod +x "bulk-change-vm-storage.sh"
 ```
 
 ## Examples
@@ -48,7 +73,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-bulk-change-vm-storage.sh 3.5.1 (project 3.5.1)
+bulk-change-vm-storage.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

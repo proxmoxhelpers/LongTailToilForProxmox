@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Create a full verified copy from an LV path, `VMID + disk-N`, or `VMID + exact-slot`; `disk-N` resolves `vm-` or `base-` sources, including template/base LVs sized from LVM metadata, and destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with destination VG/device selection, state handling and optional `boot` promotion.
+Create a full verified copy from an LV path or `VMID + selector`; numeric/`disk-N`, exact active/`unusedN` slot selectors resolve managed sources, including template/base LVs sized from LVM metadata, while destination naming automatically uses `base-` for templates or `vm-` for normal VMs, with destination VG/device selection, state handling and optional `boot` promotion.
 
 ## Usage
 
@@ -16,12 +16,13 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-create-disk-copy-and-add-to-vm.sh 3.5.1 (project 3.5.1)
+create-disk-copy-and-add-to-vm.sh 3.7.1 (project 3.7.1)
 
 USAGE
-  create-disk-copy-and-add-to-vm.sh <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
-  create-disk-copy-and-add-to-vm.sh <source-vmid> <source-disk-N|source-slot> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+  create-disk-copy-and-add-to-vm.sh <source-lv-path> <dest-vmid> [dest-N|dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+  create-disk-copy-and-add-to-vm.sh <source-vmid> <N|source-disk-N|source-slot|unusedN> <dest-vmid> [dest-N|dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
 
 DESCRIPTION
   Creates a full independent copy of an LVM-backed source disk and attaches it
@@ -29,13 +30,14 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0 or /dev/pve/base-123-disk-0.
-  <source-vmid> disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
+  <source-vmid> N|disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  <source-vmid> unusedN Resolve an exact detached/unused storage-backed disk reference.
   Exact source slots must already exist and must be storage-backed disks.
 
 DESTINATION SELECTORS
   omitted      Attach to the first free SCSI slot; choose the next free disk-N.
-  disk-N       Use that backing disk number; attach to the first free SCSI slot.
+  N or disk-N  Use that backing disk number; attach to the first free SCSI slot.
   sata0        Attach specifically at sata0; choose the next free backing disk-N.
   ide2         Attach specifically at ide2.
   scsi4        Attach specifically at scsi4.
@@ -75,18 +77,30 @@ EXAMPLES
   create-disk-copy-and-add-to-vm.sh 123 disk-0 456 disk-3 fastvg pause dryrun
   create-disk-copy-and-add-to-vm.sh /dev/pve/vm-123-disk-0 456 fastvg dryrun
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`create-disk-copy-and-add-to-vm.sh.usage`](./create-disk-copy-and-add-to-vm.sh.usage).
+
+## Test coverage
+
+- Integration reference: `50-copy-snapshot.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/create-disk-copy-and-add-to-vm.sh" -O "create-disk-copy-and-add-to-vm.sh" && chmod +x "create-disk-copy-and-add-to-vm.sh"
 ```
 
 ## Examples
@@ -105,7 +119,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-create-disk-copy-and-add-to-vm.sh 3.5.1 (project 3.5.1)
+create-disk-copy-and-add-to-vm.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.

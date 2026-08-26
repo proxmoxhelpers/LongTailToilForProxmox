@@ -1,0 +1,23 @@
+copy-vm-disk-options.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  copy-vm-disk-options.sh <source-VMID> <source-slot> <destination-VMID> <destination-slot> [dryrun|--preflight]
+
+DESCRIPTION
+  Copies cache/discard/iothread/ssd/backup/replicate/read-only policy options
+  while preserving the destination backing volume, size and unrelated options.
+  Incompatible iothread is dropped for IDE/SATA destinations. Destination VM
+  must be stopped. Post-update verification compares the backing volume exactly
+  and option key/value fields independent of Proxmox's comma-field ordering.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

@@ -1,0 +1,21 @@
+convert-thin-to-regular-lv.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  convert-thin-to-regular-lv.sh <source-LV> <destination-VG> [new-LV-name] [dryrun|--preflight]
+
+DESCRIPTION
+  Creates and byte-verifies an independent regular LV. The dd path never uses
+  sparse writes, so untouched regular-LV extents are never assumed to read zero.
+  Source is never deleted or converted in place.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
