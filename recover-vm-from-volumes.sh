@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     VG=""; RECOVERY_FILE=""
     define_colours
     parse_arguments "$@"
@@ -43,21 +43,25 @@ end() {
 # usage
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
-usage() { printf 'Usage: %s <vmid> [volume-group] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+recover-vm-from-volumes.sh $SCRIPT_VERSION (project $PROJECT_VERSION)
 
-############################################################
-# EMBEDDED SHARED RUNTIME
-#
-# This command is intentionally self-contained. The common and
-# dry-run helpers are embedded so this single file can be copied
-# anywhere and run without the repository's lib/ directory.
-############################################################
+USAGE
+  recover-vm-from-volumes.sh <vmid> [volume-group] [dryrun]
 
-# This file is sourced by executable project commands.
+DESCRIPTION
+  Creates a basic QEMU VM configuration from existing managed vm-VMID-disk-N
+  or base-VMID-disk-N LVM volumes. An optional volume group limits discovery;
+  CPU, memory, firmware, NICs, and boot settings must be reviewed before
+  starting the VM.
 
-############################################################
-# COLOURS / OUTPUT
-############################################################
+EXAMPLES
+  recover-vm-from-volumes.sh 123 pve
+
+EOF
+    dryrun_help
+}
 
 # define_colours
 # Enables terminal colours when stdout is a terminal and NO_COLOR is unset.
@@ -69,6 +73,7 @@ define_colours() {
     fi
 }
 
+
 # Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
 # Call: info [ARG...]
@@ -79,6 +84,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -391,10 +405,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -463,7 +480,7 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) VMID="$1" ;; 2) VG="$1" ;; *) usage >&2; exit 2 ;; esac ;;
         esac

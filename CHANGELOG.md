@@ -1,5 +1,84 @@
 # Changelog
 
+## 3.7.1 — 2026-08-20
+
+Real-Proxmox corrective patch based on the v3.7.0 full-suite run.
+
+- **2026-08-26 repository identity update:** standardize the project/repository name on **LongTailToilForProxmox**, update all GitHub/raw-download/install/publishing references accordingly, and keep production helper behavior unchanged.
+
+- Record the exact v3.7.0 real-host result: 74/74 static cases and 130/137 real integration cases passed; all 98 protected host baseline/after pairs and all 130 captured before/after mutation-safety pairs in the supplied evidence archive were byte-identical, with zero anomalies.
+- Fix `copy-vm-disk-options.sh` verification so Proxmox's canonical reordering of comma-separated disk options does not create a false failure. Backing volume identity remains position-sensitive/exact; option key/value tokens are compared order-independently.
+- Fix `clone-vm-storage-only.sh` for LVM-backed sources. Each source is converted to an invocation-owned regular raw staging image before `qm importdisk`; imported guest-visible bytes are verified against that immutable staging image before attachment. Inactive source activation is restored immediately after staging, and staging data is removed on every exit path.
+- Keep hot clone semantics explicit: transfer integrity against the immutable staging image is verified, but a source that changes while staging is created is not claimed to be application- or post-copy-consistent.
+- Fix exact same-identity VM restore verification: QEMU `vmgenid` is intentionally allowed to regenerate under Proxmox and is excluded from canonical persistent-config equality. A regenerated `vmgenid` is still required when the archived QEMU config contained one.
+- Fix `send-vm-export-and-restore.sh` dry-run so it performs no SSH/SCP/remote preflight at all. `--preflight` remains the explicit remote read-only check and now uses `StrictHostKeyChecking=yes`, refusing an unknown host key instead of modifying `known_hosts`.
+- Correct the unmanaged-name integration fixture: Proxmox LVM-thin rejects arbitrary `custom-*` image names as configured disks, so the test now proves that an unrelated custom LV in the owned VG is not scanned or renamed while a valid managed VM disk remains unchanged.
+- Correct archive checksum integration validation to execute `sha256sum -c ltvm/checksums.sha256` from the extraction root, matching the archive's intentionally `ltvm/...`-prefixed manifest paths.
+- Strengthen integration postconditions for disk-option copy and exact restore.
+- Add four focused static regression contracts for semantic option verification, regular-file clone staging, `vmgenid`/checksum-root exactness, and zero-SSH dry-run/host-key-safe preflight.
+- Test-suite metadata is **3.1.1**. Static/CLI validation: **78 passed, 0 failed, 0 skipped, 0 anomalies**.
+- The real integration definition remains **137 cases across 14 operational groups**. A fresh 2026-08-22 all-groups run passed **78/78 static/CLI and 137/137 real integration cases**, with **15/15 groups passed and zero failures, skips or anomalies**. v3.7.1 is therefore the current real-host integration-validated baseline; see `docs/V3.7.1-REAL-INTEGRATION-RESULTS.md`.
+- Re-audit all 81 command interfaces and documentation after acceptance: all live `--help` outputs, `.usage` snapshots and embedded helper-page help blocks are byte-identical; README/helper-index/test-matrix inventories are complete; local Markdown links resolve; stale “current” wording in historical test documentation is corrected. See `docs/V3.7.1-DOCUMENTATION-AUDIT.md`.
+
+## 3.7.0 — 2026-08-19
+
+Mount-family consolidation and project-wide CLI/documentation contract release.
+
+- Replace six historical mount/unmount entry points with five clearer public commands:
+  - `mount-vm-drives.sh` -> `mount-lvm-drives.sh`
+  - `unmount-vm-drives.sh` -> `unmount-lvm-drives.sh`
+  - `mount-vm-disk.sh` + `mount-vm-root.sh` -> `mount-vm-drive.sh`
+  - `mount-vm-filesystems.sh` -> `mount-all-vm-drives.sh`
+  - `unmount-vm-filesystems.sh` -> `unmount-all-vm-drives.sh`
+- Make `mount-vm-drive.sh` and `mount-all-vm-drives.sh` use the same mount engine and filesystem-role classifier. The only implementation difference is the hard-coded single-slot versus all-slots scope selector.
+- Require stopped QEMU state for VM-level host filesystem mounting; preserve inactive LV activation state with `lvchange -ay -K`; verify exact mounted-source identity; refuse ambiguous pre-existing mapper ownership; record invocation-owned resources; and roll back partial mount failures.
+- Pair both VM-level mount commands with `unmount-all-vm-drives.sh`, which consumes the ownership-state file and refuses cleanup when recorded source/target identity no longer matches.
+- Keep `mount-lvm-drives.sh` / `unmount-lvm-drives.sh` as the lower-level direct-LVM tools for callers that already know the LV path.
+- Standardize public help across all 81 commands. Every command accepts `-h`, `-?`, `/h`, `/?`, and `--help`, identifies itself and the project version, exposes a `USAGE` and descriptive `DESCRIPTION`, and documents every parsed long option.
+- Required-argument failures print usage instead of only a terse error.
+- Standardize dry-run documentation to the single line: `Dry-run: no system changes are made; modifying commands are printed instead of executed.`
+- Regenerate all `.usage` snapshots from live command output and synchronize the exact help block in every per-helper Markdown page.
+- Regenerate the helper index, README inventory and 81-command test matrix for the new public command surface.
+- Update integration coverage for direct-LVM mounting, one-drive VM mounting, all-drive VM mounting, role detection, read-write persistence, partition mapping, ownership-state cleanup and dry-run immutability.
+- Extend static contracts for all help aliases, incomplete-argument usage, parser/help agreement, documentation/live-help identity and the single/all VM mount-engine source-identity rule.
+- Static/CLI validation: **74 passed, 0 failed, 0 skipped, 0 anomalies**.
+- The real integration definition remains **137 cases across 14 operational groups**. v3.7.0 remains release-candidate / statically validated until that definition is rerun on a disposable real Proxmox/LVM host.
+
+## 3.6.2 — 2026-08-19
+
+Selective integration and hardening of the alternate v3.6.1 QoL/workflow command family onto the v3.5.2 safety baseline.
+
+- Add 40 standalone helpers, bringing the public command count from 42 to **82**, with matching Markdown documentation, live-help snapshots and integration references.
+- Normalize all 82 public helper version banners to `3.6.2 (project 3.6.2)` to retain the established project-wide release-version convention.
+- Retain the v3.5.2 behavior fixes instead of replacing the original 42 helpers with the older alternate copies.
+- Make physical LV identity, not a Proxmox volume-ID string, the safety boundary for shared/reference decisions in the new command runtime.
+- Restore inactive-source activation state on every success/failure exit path and authorize incomplete-copy cleanup only by the LV UUID captured after creation.
+- Harden reference-only/direct-config helpers with strict slot ranges, stopped/snapshot-free preflight, backups and abnormal-exit rollback.
+- Make mount/unmount workflows ownership-record based: exact canonical mounted sources are verified, pre-existing mapper identities are refused, partial failures roll back only invocation-owned resources and unmount refuses changed state.
+- Require exact device/mount identity for filesystem growth; separate block growth from filesystem growth and preserve grow-only semantics.
+- Harden disk flattening, storage migration, storage-only cloning and disk-rebuild workflows with transaction state, UUID identity, rollback and fail-closed cleanup.
+- Harden operation journals against predictable/symlinked/non-root-owned `/var/tmp` state and make archive output commits non-overwriting unless `--force` is explicit.
+- Keep whole-VM archive checksums as integrity evidence (not authenticity), validate archive members before extraction/execution, and verify the complete transferred archive hash before remote restore.
+- Extend style/testing guidance for exact postconditions, machine-readable output, journals, no-`eval` dispatch, growth layers, portable-backup claims and remote restore transactions.
+- Test suite version: **3.0.2**. The integrated tree defines **137** real integration cases across 14 operational groups plus the static/CLI group.
+- v3.5.1 remains the last completed real-Proxmox acceptance baseline. v3.6.2 requires a fresh real-host run and is not described as integration-validated by this static port.
+
+## 3.5.2 — 2026-08-18
+
+Documentation-contract, structural-consistency and evidence-hardening release based on the clean v3.5.1 real-Proxmox acceptance run.
+
+- Audit all 42 helpers code-first against built-in help, `.usage` snapshots, per-helper pages and README descriptions; document stopped-guest prerequisites, selector forms, QEMU/LXC scope, output-format defaults, alias-only storage-prefix rewrites and overwrite path semantics.
+- Normalize elevation lifecycle placement so every public helper performs detection in `setup()` and crosses the elevation boundary in `main()`; read-only inspection helpers now implement the elevation behavior their pages already promised.
+- Enforce the documented `import-disk-and-attach.sh` explicit-slot contract by refusing anything outside `scsi0..scsi30` before import.
+- Restrict `fix-vm-volume-names.sh` to already-managed `vm-*`/`base-*` volume names. Custom/unmanaged LVM names are left unchanged; managed family and disk number are preserved.
+- Make `mount-vm-root.sh` rank Linux-root candidates and report the strongest candidate while retaining Windows/EFI/recovery role classification.
+- Correct transaction-function documentation and the misplaced `change_bus` comment; extend static checks for elevation placement, embedded standalone payload synchronization, documented safety semantics and evidence provenance.
+- Add test-only failure injection for both overwrite engines after old-disk archive/final replacement rename but before new attachment; rollback must return the complete disposable state to its byte-identical pre-command snapshot. No production failure-injection hook is introduced.
+- Expand real integration coverage from 88 to 92 cases with invalid import-slot refusal, unmanaged-name preservation and two rollback failure-injection cases.
+- Record the supplied v3.5.1 result as the accepted predecessor baseline: 50/50 static and 88/88 real integration cases passed with zero skips, failures or anomalies.
+- Test-suite metadata is now 2.9.2. Result directories capture environment/tool versions, project SHA-256 manifests, fixture manifests and final summaries; successful static evidence is retained.
+- v3.5.2 remains release-candidate / statically validated until the revised 92-case real integration definition passes on a disposable real Proxmox host.
+
 ## 3.5.1 — 2026-08-17
 
 Bugfix release based on the v3.4.7 real-Proxmox acceptance results supplied on 2026-08-17.

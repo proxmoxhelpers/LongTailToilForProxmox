@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     TARGET_MODE="list"; TARGET_FILE=""; TARGET_ARGS=""; ALL_UNUSED_FILE=""
     define_colours
     parse_arguments "$@"
@@ -46,7 +46,25 @@ end() {
 # usage
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
-usage() { printf 'Usage: %s <vmid> [unusedN ... | --all] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <vmid> [unusedN ... | --all] [dryrun]
+
+DESCRIPTION
+  With no unusedN/--all selector, lists the VM's unused disk references.
+  With explicit unusedN keys or --all, permanently deletes the selected
+  backing volumes and removes their unusedN references.
+
+SAFETY
+  Listing is read-only and does not require the VM to be stopped.
+  Deletion requires the QEMU VM to be stopped and refuses shared volumes.
+
+EOF
+    dryrun_help
+}
 
 ############################################################
 # EMBEDDED SHARED RUNTIME
@@ -82,6 +100,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -394,10 +421,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -466,7 +496,7 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
                 if [ "$pa_seen_vmid" = false ]; then VMID="$1"; pa_seen_vmid=true

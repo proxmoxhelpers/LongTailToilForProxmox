@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; ARG5=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
@@ -80,8 +80,8 @@ usage() {
 $(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
 
 USAGE
-  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> [dest-N|dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <N|source-disk-N|source-slot|unusedN> <dest-vmid> [dest-N|dest-disk-N|dest-slot|dest-bus] [dest-vg] [hot|pause|stop|restart] [boot] [dryrun]
 
 DESCRIPTION
   Creates a full independent copy of an LVM-backed source disk and attaches it
@@ -89,13 +89,14 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0 or /dev/pve/base-123-disk-0.
-  <source-vmid> disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
+  <source-vmid> N|disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  <source-vmid> unusedN Resolve an exact detached/unused storage-backed disk reference.
   Exact source slots must already exist and must be storage-backed disks.
 
 DESTINATION SELECTORS
   omitted      Attach to the first free SCSI slot; choose the next free disk-N.
-  disk-N       Use that backing disk number; attach to the first free SCSI slot.
+  N or disk-N  Use that backing disk number; attach to the first free SCSI slot.
   sata0        Attach specifically at sata0; choose the next free backing disk-N.
   ide2         Attach specifically at ide2.
   scsi4        Attach specifically at scsi4.
@@ -173,6 +174,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -485,10 +495,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -844,6 +857,8 @@ select_destination_storage() {
     [ "$DEST_STORAGE_TYPE" != "lvmthin" ] || [ -n "$DEST_POOL" ] || die "Storage $STORAGE_ID is lvmthin but has no thinpool configured."
 }
 
+# create_destination
+# Creates the destination LV in the selected regular/thin allocation mode and verifies its size.
 create_destination() {
     info "Creating destination LV..."
     if [ "$DEST_STORAGE_TYPE" = "lvmthin" ]; then
@@ -966,7 +981,7 @@ parse_arguments() {
             dryrun|--dryrun) enable_dryrun ;;
             hot|pause|stop|restart) set_state_mode "$1" ;;
             boot) BOOT_REQUESTED=1 ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
                 ARG_COUNT=$((ARG_COUNT + 1))
@@ -985,12 +1000,12 @@ parse_arguments() {
             SOURCE_FORM="path"; SOURCE_INPUT="$ARG1"; DEST_VMID="$ARG2"
             if [ "$ARG_COUNT" -ge 3 ]; then
                 if ! assign_destination_selector "$ARG3"; then
-                    case "$ARG3" in ide*|sata*|scsi*|virtio*) die "Invalid destination slot/bus selector: $ARG3" ;; esac
+                    case "$ARG3" in ide*|sata*|scsi*|virtio*) usage_error "Invalid destination slot/bus selector: $ARG3" ;; esac
                     REQUESTED_DEST_VG="$ARG3"
                 fi
             fi
             if [ "$ARG_COUNT" -eq 4 ]; then
-                [ -n "$REQUESTED_DEST_DISK$REQUESTED_DEST_SLOT_SELECTOR" ] || die "When four positional arguments are used, the third must be a destination selector and the fourth destination-vg."
+                [ -n "$REQUESTED_DEST_DISK$REQUESTED_DEST_SLOT_SELECTOR" ] || usage_error "When four positional arguments are used, the third must be a destination selector and the fourth destination-vg."
                 REQUESTED_DEST_VG="$ARG4"
             fi
             ;;
@@ -999,12 +1014,12 @@ parse_arguments() {
             SOURCE_FORM="vm"; SOURCE_VM_INPUT="$ARG1"; SOURCE_SELECTOR="$ARG2"; DEST_VMID="$ARG3"
             if [ "$ARG_COUNT" -ge 4 ]; then
                 if ! assign_destination_selector "$ARG4"; then
-                    case "$ARG4" in ide*|sata*|scsi*|virtio*) die "Invalid destination slot/bus selector: $ARG4" ;; esac
+                    case "$ARG4" in ide*|sata*|scsi*|virtio*) usage_error "Invalid destination slot/bus selector: $ARG4" ;; esac
                     REQUESTED_DEST_VG="$ARG4"
                 fi
             fi
             if [ "$ARG_COUNT" -eq 5 ]; then
-                [ -n "$REQUESTED_DEST_DISK$REQUESTED_DEST_SLOT_SELECTOR" ] || die "When five positional arguments are used, the fourth must be a destination selector and the fifth destination-vg."
+                [ -n "$REQUESTED_DEST_DISK$REQUESTED_DEST_SLOT_SELECTOR" ] || usage_error "When five positional arguments are used, the fourth must be a destination selector and the fifth destination-vg."
                 REQUESTED_DEST_VG="$ARG5"
             fi
             ;;
@@ -1051,6 +1066,8 @@ resolve_destination_attachment() {
     esac
 }
 
+# validate_destination_vm
+# Validates the destination QEMU VM and records its current runtime state.
 validate_destination_vm() {
     require_qemu_vm "$DEST_VMID"
     TARGET_CONFIG="/etc/pve/qemu-server/${DEST_VMID}.conf"
@@ -1092,6 +1109,8 @@ select_disk_name() {
 # HIGH LEVEL TASKS
 ############################################################
 
+# print_plan
+# Summarizes the resolved source, destination, allocation, state mode and boot intent before mutation.
 print_plan() {
     print_banner "Create independent disk copy and attach to VM"
     printf 'Source LV:             %s\n' "$SOURCE_PATH"
@@ -1110,6 +1129,8 @@ print_plan() {
     [ "$MODE" != "hot" ] || warn "Hot mode does not quiesce the source VM; the source can change while the copy runs."
 }
 
+# attach_copy
+# Attaches the verified independent copy at the resolved destination slot.
 attach_copy() {
     ac_now="$(disk_value "$DEST_VMID" "$SCSI_DEVICE" 2>/dev/null || :)"
     [ -z "$ac_now" ] || die "Destination slot $SCSI_DEVICE became occupied after preflight; refusing to attach the copied disk."
@@ -1121,6 +1142,8 @@ attach_copy() {
     ATTACHED=1
 }
 
+# verify_result
+# Verifies the destination LV, VM reference, source-state contract, and optional boot order.
 verify_result() {
     if dryrun_enabled; then
         dryrun_verify "Destination LV would exist"
@@ -1146,6 +1169,8 @@ install_transaction_traps() {
     trap 'exit 143' TERM
 }
 
+# cleanup_on_exit
+# Transaction trap: restores source/guest state and removes an unattached partial copy after failure.
 cleanup_on_exit() {
     coe_status=$?
     trap - 0 HUP INT TERM

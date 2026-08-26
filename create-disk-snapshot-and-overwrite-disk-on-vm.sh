@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
@@ -82,9 +82,9 @@ $(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
 
 USAGE
   $(basename "$0") <source-lv-path> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  $(basename "$0") <source-lv-path> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> <dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> <dest-N|dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <N|source-disk-N|source-slot|unusedN> <destination-lv-path> [hot|pause|stop|restart] [delete] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <N|source-disk-N|source-slot|unusedN> <dest-vmid> <dest-N|dest-disk-N|dest-slot|dest-bus> [hot|pause|stop|restart] [delete] [boot] [dryrun]
 
 DESCRIPTION
   Creates an LVM-thin snapshot from the source and places it on the requested destination
@@ -93,12 +93,17 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path.
-  <source-vmid> disk-N  Resolve a managed vm-/base- backing volume.
+  <source-vmid> N|disk-N  Resolve a managed vm-/base- backing volume.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  <source-vmid> unusedN Resolve an exact detached/unused storage-backed disk reference.
   Source slots such as sata0, ide2, scsi4, and virtio0 must already exist.
 
 DESTINATION SELECTORS
-  disk-N       Target that backing disk number. If absent, create it on first free SCSI.
+  <destination-lv-path>
+               Must resolve to an LVM LV attached as exactly one active disk
+               on exactly one QEMU VM. Zero or multiple active QEMU references
+               are refused; unusedN-only references do not select a destination.
+  N or disk-N  Target that backing disk number. If absent, create it on first free SCSI.
   sata0        Use exactly sata0; replace it if occupied, create there if empty.
   ide2         Use exactly ide2.
   scsi4        Use exactly scsi4.
@@ -170,6 +175,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -482,10 +496,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -1237,6 +1254,8 @@ select_storage() {
     esac
 }
 
+# create_snapshot
+# Creates the staged linked snapshot and records its stable UUID before any destination mutation.
 create_snapshot() {
     info "Creating LVM-thin snapshot..."
     if dryrun_enabled; then dryrun_cmd lvcreate --snapshot --name "$NEW_LV_NAME" "${SOURCE_VG}/${SOURCE_LV}"
@@ -1256,6 +1275,8 @@ create_snapshot() {
     [ "$NEW_ORIGIN" = "$SOURCE_LV" ] && [ "$NEW_POOL" = "$SOURCE_POOL" ] || die "Snapshot origin/thin-pool verification failed."
 }
 
+# verify_storage_mapping
+# Proves the staged Proxmox volume ID resolves to the newly created snapshot LV UUID.
 verify_storage_mapping() {
     if dryrun_enabled; then
         PVE_PATH="$NEW_LV_PATH"
@@ -1325,7 +1346,7 @@ parse_arguments() {
             hot|pause|stop|restart) set_state_mode "$1" ;;
             delete) DELETE_OLD=1 ;;
             boot) BOOT_REQUESTED=1 ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
                 ARG_COUNT=$((ARG_COUNT + 1))
@@ -1415,6 +1436,8 @@ select_new_disk_name() {
 # HIGH LEVEL TASKS
 ############################################################
 
+# print_plan
+# Summarizes the staged/final snapshot, displaced-disk policy, destination state mode and boot intent before mutation.
 print_plan() {
     print_banner "Overwrite/add VM disk with linked snapshot"
     printf 'Source LV:              %s\n' "$SOURCE_PATH"
@@ -1531,6 +1554,8 @@ replace_destination_disk() {
     NEW_ATTACHED=1
 }
 
+# delete_archived_disk
+# Deletes the displaced archived LV only after the replacement snapshot is attached and verified, when requested.
 delete_archived_disk() {
     [ "$DELETE_OLD" -eq 1 ] || return 0
     if [ "$DEST_EXISTS" -eq 0 ]; then
@@ -1572,6 +1597,8 @@ delete_archived_disk() {
     OLD_DELETED=1
 }
 
+# verify_result
+# Verifies final disk identity, snapshot origin, archived/deleted old-disk state, guest state, and boot order.
 verify_result() {
     if dryrun_enabled; then
         if [ "$DEST_EXISTS" -eq 1 ]; then
@@ -1615,6 +1642,8 @@ install_transaction_traps() {
     trap 'exit 143' TERM
 }
 
+# cleanup_on_exit
+# Transaction trap: invokes UUID-safe rollback and restores destination guest state after failure.
 cleanup_on_exit() {
     coe_status=$?
     trap - 0 HUP INT TERM

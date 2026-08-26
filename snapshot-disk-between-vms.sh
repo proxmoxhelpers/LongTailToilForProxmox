@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     define_colours
     parse_arguments "$@"
     check_elevation
@@ -39,21 +39,24 @@ end() { :; }
 # usage
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
-usage() { printf 'Usage: %s <source-vmid> <source-slot> <destination-vmid> [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+snapshot-disk-between-vms.sh $SCRIPT_VERSION (project $PROJECT_VERSION)
 
-############################################################
-# EMBEDDED SHARED RUNTIME
-#
-# This command is intentionally self-contained. The common and
-# dry-run helpers are embedded so this single file can be copied
-# anywhere and run without the repository's lib/ directory.
-############################################################
+USAGE
+  snapshot-disk-between-vms.sh <source-vmid> <source-slot> <destination-vmid> [dryrun]
 
-# This file is sourced by executable project commands.
+DESCRIPTION
+  Creates a linked LVM-thin snapshot of one active source VM disk and attaches
+  that snapshot to another QEMU VM after validating source storage and
+  destination slot availability.
 
-############################################################
-# COLOURS / OUTPUT
-############################################################
+EXAMPLES
+  snapshot-disk-between-vms.sh 123 scsi0 456
+
+EOF
+    dryrun_help
+}
 
 # define_colours
 # Enables terminal colours when stdout is a terminal and NO_COLOR is unset.
@@ -65,6 +68,7 @@ define_colours() {
     fi
 }
 
+
 # Call: print_banner ARG1
 print_banner() { printf '\n%s%s============================================================\n%s\n============================================================%s\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET"; }
 # Call: info [ARG...]
@@ -75,6 +79,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -387,10 +400,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -459,7 +475,7 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) SRC_VM="$1" ;; 2) SLOT="$1" ;; 3) DST_VM="$1" ;; *) usage >&2; exit 2 ;; esac ;;
         esac
@@ -491,7 +507,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     MODE="hot"; MODE_ARG=""
     ARG_COUNT=0; ARG1=""; ARG2=""; ARG3=""; ARG4=""; 
     SOURCE_FORM=""; SOURCE_INPUT=""; SOURCE_VM_INPUT=""; SOURCE_SELECTOR=""
@@ -554,8 +570,8 @@ usage() {
 $(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
 
 USAGE
-  $(basename "$0") <source-lv-path> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [hot|pause|stop|restart] [boot] [dryrun]
-  $(basename "$0") <source-vmid> <source-disk-N|source-slot> <dest-vmid> [dest-disk-N|dest-slot|dest-bus] [hot|pause|stop|restart] [boot] [dryrun]
+  $(basename "$0") <source-lv-path> <dest-vmid> [dest-N|dest-disk-N|dest-slot|dest-bus] [hot|pause|stop|restart] [boot] [dryrun]
+  $(basename "$0") <source-vmid> <N|source-disk-N|source-slot|unusedN> <dest-vmid> [dest-N|dest-disk-N|dest-slot|dest-bus] [hot|pause|stop|restart] [boot] [dryrun]
 
 DESCRIPTION
   Creates an LVM-thin snapshot of the source and attaches it to a destination
@@ -563,13 +579,14 @@ DESCRIPTION
 
 SOURCE SELECTORS
   <source-lv-path>      Full LVM path such as /dev/pve/vm-123-disk-0 or /dev/pve/base-123-disk-0.
-  <source-vmid> disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
+  <source-vmid> N|disk-N  Resolve a vm-*/base-* managed backing volume by disk number.
   <source-vmid> sata0   Resolve an exact configured QEMU disk slot.
+  <source-vmid> unusedN Resolve an exact detached/unused storage-backed disk reference.
   Exact source slots must already exist and must be storage-backed disks.
 
 DESTINATION SELECTORS
   omitted      Attach to the first free SCSI slot; choose the next free disk-N.
-  disk-N       Use that backing disk number; attach to the first free SCSI slot.
+  N or disk-N  Use that backing disk number; attach to the first free SCSI slot.
   sata0        Attach specifically at sata0; choose the next free backing disk-N.
   ide2         Attach specifically at ide2.
   scsi4        Attach specifically at scsi4.
@@ -635,6 +652,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -947,10 +973,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -1286,6 +1315,8 @@ select_storage() {
     esac
 }
 
+# create_snapshot
+# Creates the linked LVM-thin snapshot and verifies its origin/pool metadata.
 create_snapshot() {
     info "Creating LVM-thin snapshot..."
     if dryrun_enabled; then dryrun_cmd lvcreate --snapshot --name "$NEW_LV_NAME" "${SOURCE_VG}/${SOURCE_LV}"
@@ -1360,7 +1391,7 @@ parse_arguments() {
             dryrun|--dryrun) enable_dryrun ;;
             hot|pause|stop|restart) set_state_mode "$1" ;;
             boot) BOOT_REQUESTED=1 ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
                 ARG_COUNT=$((ARG_COUNT + 1))
@@ -1374,12 +1405,12 @@ parse_arguments() {
         /*)
             [ "$ARG_COUNT" -ge 2 ] && [ "$ARG_COUNT" -le 3 ] || { usage >&2; exit 2; }
             SOURCE_FORM="path"; SOURCE_INPUT="$ARG1"; DEST_VMID="$ARG2"
-            if [ "$ARG_COUNT" -eq 3 ]; then assign_destination_selector "$ARG3" || die "Destination selector must be N, disk-N, an exact QEMU disk slot, or ide/sata/scsi/virtio."; fi
+            if [ "$ARG_COUNT" -eq 3 ]; then assign_destination_selector "$ARG3" || usage_error "Destination selector must be N, disk-N, an exact QEMU disk slot, or ide/sata/scsi/virtio."; fi
             ;;
         *)
             [ "$ARG_COUNT" -ge 3 ] && [ "$ARG_COUNT" -le 4 ] || { usage >&2; exit 2; }
             SOURCE_FORM="vm"; SOURCE_VM_INPUT="$ARG1"; SOURCE_SELECTOR="$ARG2"; DEST_VMID="$ARG3"
-            if [ "$ARG_COUNT" -eq 4 ]; then assign_destination_selector "$ARG4" || die "Destination selector must be N, disk-N, an exact QEMU disk slot, or ide/sata/scsi/virtio."; fi
+            if [ "$ARG_COUNT" -eq 4 ]; then assign_destination_selector "$ARG4" || usage_error "Destination selector must be N, disk-N, an exact QEMU disk slot, or ide/sata/scsi/virtio."; fi
             ;;
     esac
 }
@@ -1424,6 +1455,8 @@ resolve_destination_attachment() {
     esac
 }
 
+# validate_destination_vm
+# Validates the destination QEMU VM and records its current runtime state.
 validate_destination_vm() {
     require_qemu_vm "$DEST_VMID"
     TARGET_CONFIG="/etc/pve/qemu-server/${DEST_VMID}.conf"
@@ -1433,6 +1466,8 @@ validate_destination_vm() {
     if printf '%s\n' "$TARGET_QM_CONFIG" | grep -qE '^template:[[:space:]]*1([[:space:]]|$)'; then DEST_PREFIX="base"; fi
 }
 
+# select_disk_name
+# Chooses a collision-free managed vm-/base- destination LV name and backing disk number.
 select_disk_name() {
     if [ -n "$REQUESTED_DEST_DISK" ]; then
         DISK_NUMBER="$REQUESTED_DEST_DISK"
@@ -1462,6 +1497,8 @@ select_disk_name() {
 # HIGH LEVEL TASKS
 ############################################################
 
+# print_plan
+# Summarizes the resolved source, destination snapshot, state mode and boot intent before mutation.
 print_plan() {
     print_banner "Create linked disk snapshot and attach to VM"
     printf 'Source LV:             %s\n' "$SOURCE_PATH"
@@ -1479,6 +1516,8 @@ print_plan() {
     [ "$MODE" != "hot" ] || warn "Hot mode does not quiesce the source VM while the snapshot is created."
 }
 
+# attach_snapshot
+# Attaches the verified snapshot at the resolved destination slot.
 attach_snapshot() {
     as_now="$(disk_value "$DEST_VMID" "$SCSI_DEVICE" 2>/dev/null || :)"
     [ -z "$as_now" ] || die "Destination slot $SCSI_DEVICE became occupied after preflight; refusing to attach the snapshot."
@@ -1490,6 +1529,8 @@ attach_snapshot() {
     ATTACHED=1
 }
 
+# verify_result
+# Verifies the snapshot, VM reference, source-state contract, origin, and optional boot order.
 verify_result() {
     if dryrun_enabled; then
         dryrun_verify "Snapshot LV would exist"
@@ -1518,6 +1559,8 @@ install_transaction_traps() {
     trap 'exit 143' TERM
 }
 
+# cleanup_on_exit
+# Transaction trap: restores source/guest state and removes an unattached snapshot after failure.
 cleanup_on_exit() {
     coe_status=$?
     trap - 0 HUP INT TERM

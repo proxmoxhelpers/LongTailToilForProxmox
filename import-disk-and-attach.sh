@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     SLOT=""
     define_colours
     parse_arguments "$@"
@@ -43,7 +43,28 @@ end() {
 # usage
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
-usage() { printf 'Usage: %s <image-file> <vmid> <destination-storage> [scsiN] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <image-file> <vmid> <destination-storage> [scsiN] [dryrun]
+
+DESCRIPTION
+  Imports a disk image into Proxmox storage and attaches the newly imported
+  volume to a stopped QEMU VM.
+
+DESTINATION SLOT
+  omitted  Use the first free SCSI slot.
+  scsiN    Use exactly scsi0..scsi30; the slot must be empty.
+
+SAFETY
+  The VM must be stopped. Explicit non-SCSI or out-of-range slots are refused
+  during preflight, before qm importdisk creates storage.
+
+EOF
+    dryrun_help
+}
 
 ############################################################
 # EMBEDDED SHARED RUNTIME
@@ -79,6 +100,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -391,10 +421,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -463,7 +496,7 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) IMAGE="$1" ;; 2) VMID="$1" ;; 3) STORAGE="$1" ;; 4) SLOT="$1" ;; *) usage >&2; exit 2 ;; esac ;;
         esac
@@ -483,7 +516,13 @@ validate_import() {
     [ -f "$IMAGE" ] || die "Image file does not exist: $IMAGE"
     require_qemu_vm "$VMID"; require_guest_stopped "$VMID"
     pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "Storage unavailable: $STORAGE"
-    [ -n "$SLOT" ] || SLOT="$(first_free_scsi "$VMID")"
+    if [ -n "$SLOT" ]; then
+        vi_slot_num="${SLOT#scsi}"
+        case "$SLOT" in scsi*) ;; *) die "Explicit slot must be scsi0..scsi30: $SLOT" ;; esac
+        case "$vi_slot_num" in 0|[1-9]|[12][0-9]|30) ;; *) die "Explicit slot must be scsi0..scsi30: $SLOT" ;; esac
+    else
+        SLOT="$(first_free_scsi "$VMID")"
+    fi
     [ -z "$(disk_value "$VMID" "$SLOT")" ] || die "$SLOT is already occupied."
     BEFORE_FILE="$(mktemp)" || die "Unable to create import state file."
     register_temp_file "$BEFORE_FILE"

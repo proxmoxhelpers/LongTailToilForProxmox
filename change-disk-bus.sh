@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     DEST="scsi"
     define_colours
     parse_arguments "$@"
@@ -39,7 +39,33 @@ end() { dryrun_summary; }
 # usage
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
-usage() { printf 'Usage: %s <vmid> <source-slot> [destination-slot|scsi|virtio|sata|ide] [dryrun]\n' "$(basename "$0")"; dryrun_help; }
+usage() {
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <vmid> <source-slot> [destination-slot|scsi|virtio|sata|ide] [dryrun]
+
+DESCRIPTION
+  Moves an existing QEMU disk configuration entry to another disk bus/slot
+  without moving its backing volume. The VM must be stopped.
+
+DESTINATION
+  omitted  Use the first free SCSI slot.
+  scsi     Use the first free SCSI slot.
+  virtio   Use the first free VirtIO slot.
+  sata     Use the first free SATA slot.
+  ide      Use the first free IDE slot.
+  BUSN     Use that exact empty slot, for example sata0 or virtio2.
+
+NOTES
+  Disk options are preserved when compatible. iothread is removed when moving
+  to SATA or IDE because those buses do not accept it. The VM config is backed
+  up and the exact rewritten value is verified.
+
+EOF
+    dryrun_help
+}
 
 ############################################################
 # EMBEDDED SHARED RUNTIME
@@ -75,6 +101,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -387,10 +422,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -459,7 +497,7 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *) pa_count=$((pa_count + 1)); case "$pa_count" in 1) VMID="$1" ;; 2) SRC="$1" ;; 3) DEST="$1" ;; *) usage >&2; exit 2 ;; esac ;;
         esac
@@ -496,8 +534,8 @@ select_destination() {
 # HIGH LEVEL TASKS
 ############################################################
 
-# change_bus
-# Backs up the VM config, rewrites the disk-slot key, and verifies the exact value at the new slot.
+# sanitize_destination_value
+# Removes disk options that are incompatible with the selected destination bus.
 sanitize_destination_value() {
     DEST_VALUE="$VALUE"
     case "$DEST" in
@@ -511,6 +549,8 @@ sanitize_destination_value() {
     esac
 }
 
+# change_bus
+# Backs up the VM config, rewrites the disk-slot key, and verifies the exact value at the new slot.
 change_bus() {
     dryrun_cmd cp "$CONFIG" "$BACKUP"
     dryrun_cmd sed -i "s/^${SRC}:/${DEST}:/" "$CONFIG"

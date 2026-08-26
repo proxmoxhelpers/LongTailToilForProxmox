@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     TAG=""; FIREWALL=""; MODEL=""; VMIDS=""
     define_colours
     parse_arguments "$@"
@@ -38,10 +38,30 @@ end() { dryrun_summary; }
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
 usage() {
-    printf 'Usage: %s <netN> <bridge> [--tag N|none] [--firewall 0|1] [--model MODEL] <vmid>... [dryrun]\n' "$(basename "$0")"
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <netN> <bridge> [--tag N|none] [--firewall 0|1] [--model MODEL] <vmid>... [dryrun]
+
+DESCRIPTION
+  Applies the requested NIC changes to one netN slot across local QEMU VMs
+  and LXC containers while preserving unmodified NIC options.
+
+OPTIONS
+  --tag N       Set VLAN tag N.
+  --tag none    Remove the existing VLAN tag.
+  --firewall N  Set firewall=0 or firewall=1.
+  --model MODEL Change the QEMU NIC model while preserving its MAC address.
+                LXC uses veth NICs; --model is intentionally ignored for CTs.
+
+NOTES
+  Every listed guest must exist locally and already have the selected netN.
+  QEMU changes use qm set; LXC changes use pct set.
+
+EOF
     dryrun_help
 }
-
 ############################################################
 # EMBEDDED SHARED RUNTIME
 #
@@ -76,6 +96,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -388,10 +417,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -459,10 +491,10 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun; shift ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             --tag|--firewall|--model)
-                pa_opt="$1"; [ "$#" -ge 2 ] || die "Missing value for $pa_opt"
+                pa_opt="$1"; [ "$#" -ge 2 ] || usage_error "Missing value for $pa_opt"
                 case "$pa_opt" in --tag) TAG="$2" ;; --firewall) FIREWALL="$2" ;; --model) MODEL="$2" ;; esac
                 shift 2
                 ;;

@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     CANDIDATE_FILE=""; PLAN_FILE=""
     define_colours
     parse_arguments "$@"
@@ -28,11 +28,9 @@ main() {
     need_commands qm pvesm lvs lvrename cp sed grep sort mktemp
     require_qemu_vm "$VMID"; require_guest_stopped "$VMID"
     CONFIG="/etc/pve/qemu-server/${VMID}.conf"
-    VM_IS_TEMPLATE=0
-    qm config "$VMID" | grep -qE '^template:[[:space:]]*1([[:space:]]|$)' && VM_IS_TEMPLATE=1 || :
     collect_candidates
     build_fix_plan
-    [ "$FIX_COUNT" -gt 0 ] || { ok "All LVM-backed VM volumes already use vm-${VMID}-disk-N or base-${VMID}-disk-N names."; return 0; }
+    [ "$FIX_COUNT" -gt 0 ] || { ok "No managed LVM-backed volume names require VMID correction."; return 0; }
     apply_fix_plan
     verify_fix
 }
@@ -50,12 +48,27 @@ end() {
 # Call: usage
 # Prints command-line usage and exits only when the caller chooses to exit.
 usage() {
-    printf 'Usage: %s <vmid> [dryrun]\n' "$(basename "$0")"
-    printf 'Correct mismatched vm-ID-disk-N / base-ID-disk-N backing names while preserving family and disk-N.\n'
-    printf 'Includes normal disks, unusedN, efidiskN and tpmstateN references. Exact managed-name collisions are refused.\n'
+    cat <<EOF
+$(basename "$0") $SCRIPT_VERSION (project $PROJECT_VERSION)
+
+USAGE
+  $(basename "$0") <vmid> [dryrun]
+
+DESCRIPTION
+  Corrects LVM-backed managed names whose embedded VMID does not match the
+  referencing QEMU VM, preserving vm-/base- family and the original disk-N.
+
+  Normal disks, unusedN, efidiskN and tpmstateN references are inspected.
+  Only configured vm-/base-...-disk-N names are repair candidates. Unrelated
+  custom/unmanaged LVs are never scanned or renamed.
+
+SAFETY
+  The VM must be stopped. Shared volumes and exact corrected-name collisions
+  are refused before mutation.
+
+EOF
     dryrun_help
 }
-
 ############################################################
 # EMBEDDED SHARED RUNTIME
 #
@@ -90,6 +103,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -402,10 +424,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -473,7 +498,7 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *) pa_count=$((pa_count + 1)); [ "$pa_count" -eq 1 ] && VMID="$1" || { usage >&2; exit 2; } ;;
         esac
@@ -498,9 +523,9 @@ collect_candidates() {
 # build_fix_plan
 #
 # Description:
-#   Plans all mismatched LVM-backed volume renames before mutation. Existing
-#   vm/base volume families are preserved; otherwise templates use base- and
-#   normal VMs use vm-. Destination names are collision checked in the VG.
+#   Plans corrections only for already-managed vm-/base- names whose embedded
+#   VMID is stale. Family and disk-N are preserved; unmanaged/custom names are
+#   deliberately excluded. Destination names are collision checked in the VG.
 #
 # Usage:
 #   build_fix_plan
@@ -518,76 +543,44 @@ collect_candidates() {
 build_fix_plan() {
     PLAN_FILE="$(mktemp)" || die "Unable to create volume-name plan."
     register_temp_file "$PLAN_FILE"
-    bfp_vm_max=-1; bfp_base_max=-1
-
-    while IFS= read -r bfp_volid; do
-        bfp_name="${bfp_volid#*:}"
-        if printf '%s\n' "$bfp_name" | grep -qE "^vm-${VMID}-disk-[0-9]+$"; then
-            bfp_num="${bfp_name##*-disk-}"; [ "$bfp_num" -le "$bfp_vm_max" ] || bfp_vm_max="$bfp_num"
-        elif printf '%s\n' "$bfp_name" | grep -qE "^base-${VMID}-disk-[0-9]+$"; then
-            bfp_num="${bfp_name##*-disk-}"; [ "$bfp_num" -le "$bfp_base_max" ] || bfp_base_max="$bfp_num"
-        fi
-    done < "$CANDIDATE_FILE"
-    bfp_vm_next=$((bfp_vm_max + 1)); bfp_base_next=$((bfp_base_max + 1)); FIX_COUNT=0
+    FIX_COUNT=0
 
     while IFS= read -r bfp_volid; do
         [ -n "$bfp_volid" ] || continue
         bfp_name="${bfp_volid#*:}"
-        if printf '%s\n' "$bfp_name" | grep -qE "^(vm|base)-${VMID}-disk-[0-9]+$"; then continue; fi
+
+        # The public contract is intentionally conservative: repair only
+        # already-managed vm-/base- names. Anything outside that managed
+        # grammar is not converted implicitly.
+        if ! printf '%s\n' "$bfp_name" | grep -qE '^(vm|base)-[0-9]+-disk-[0-9]+$'; then
+            info "Leaving unmanaged LVM volume name unchanged: $bfp_volid"
+            continue
+        fi
+        if printf '%s\n' "$bfp_name" | grep -qE "^(vm|base)-${VMID}-disk-[0-9]+$"; then
+            continue
+        fi
 
         case "$bfp_name" in
             base-*-disk-*) bfp_family="base" ;;
             vm-*-disk-*) bfp_family="vm" ;;
-            *) if [ "$VM_IS_TEMPLATE" -eq 1 ]; then bfp_family="base"; else bfp_family="vm"; fi ;;
+            *) die "Internal managed-name classification failure: $bfp_name" ;;
         esac
+        bfp_preferred_num="${bfp_name##*-disk-}"
 
-        bfp_path="$(pvesm path "$bfp_volid" 2>/dev/null || :)"; [ -n "$bfp_path" ] || continue
+        bfp_path="$(pvesm path "$bfp_volid" 2>/dev/null || :)"
+        [ -n "$bfp_path" ] || { warn "Skipping unresolved managed volume $bfp_volid"; continue; }
         lvs "$bfp_path" >/dev/null 2>&1 || { warn "Skipping non-LVM volume $bfp_volid"; continue; }
         bfp_refs="$(other_volume_references "$bfp_volid" "$CONFIG")"
         [ -z "$bfp_refs" ] || { printf '%s\n' "$bfp_refs"; die "$bfp_volid is referenced by another guest."; }
         bfp_vg="$(lvs --noheadings -o vg_name "$bfp_path" | trim)"
         bfp_old="$(lvs --noheadings -o lv_name "$bfp_path" | trim)"
+        bfp_new="${bfp_family}-${VMID}-disk-${bfp_preferred_num}"
 
-        bfp_preferred_num=""
-        case "$bfp_name" in
-            vm-*-disk-*|base-*-disk-*)
-                bfp_preferred_num="${bfp_name##*-disk-}"
-                case "$bfp_preferred_num" in ''|*[!0-9]*) bfp_preferred_num="" ;; esac
-                ;;
-        esac
-
-        if [ -n "$bfp_preferred_num" ]; then
-            bfp_new="${bfp_family}-${VMID}-disk-${bfp_preferred_num}"
-            if lvs "$bfp_vg/$bfp_new" >/dev/null 2>&1; then
-                die "Corrected destination LV already exists: /dev/${bfp_vg}/${bfp_new}"
-            fi
-            if awk -F'|' -v vg="$bfp_vg" -v name="$bfp_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
-                die "Multiple source volumes would map to /dev/${bfp_vg}/${bfp_new}; refusing to change disk numbers implicitly."
-            fi
-            if [ "$bfp_family" = "base" ] && [ "$bfp_preferred_num" -ge "$bfp_base_next" ]; then bfp_base_next=$((bfp_preferred_num + 1)); fi
-            if [ "$bfp_family" = "vm" ] && [ "$bfp_preferred_num" -ge "$bfp_vm_next" ]; then bfp_vm_next=$((bfp_preferred_num + 1)); fi
-        elif [ "$bfp_family" = "base" ]; then
-            bfp_next="$bfp_base_next"
-            while :; do
-                bfp_new="base-${VMID}-disk-${bfp_next}"
-                if lvs "$bfp_vg/$bfp_new" >/dev/null 2>&1; then bfp_next=$((bfp_next + 1)); continue; fi
-                if awk -F'|' -v vg="$bfp_vg" -v name="$bfp_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
-                    bfp_next=$((bfp_next + 1)); continue
-                fi
-                break
-            done
-            bfp_base_next=$((bfp_next + 1))
-        else
-            bfp_next="$bfp_vm_next"
-            while :; do
-                bfp_new="vm-${VMID}-disk-${bfp_next}"
-                if lvs "$bfp_vg/$bfp_new" >/dev/null 2>&1; then bfp_next=$((bfp_next + 1)); continue; fi
-                if awk -F'|' -v vg="$bfp_vg" -v name="$bfp_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
-                    bfp_next=$((bfp_next + 1)); continue
-                fi
-                break
-            done
-            bfp_vm_next=$((bfp_next + 1))
+        if lvs "$bfp_vg/$bfp_new" >/dev/null 2>&1; then
+            die "Corrected destination LV already exists: /dev/${bfp_vg}/${bfp_new}"
+        fi
+        if awk -F'|' -v vg="$bfp_vg" -v name="$bfp_new" '$3==vg && $5==name {found=1} END {exit(found ? 0 : 1)}' "$PLAN_FILE"; then
+            die "Multiple source volumes would map to /dev/${bfp_vg}/${bfp_new}; refusing to change disk numbers implicitly."
         fi
 
         bfp_new_volid="${bfp_volid%%:*}:$bfp_new"
@@ -601,7 +594,7 @@ build_fix_plan() {
 ############################################################
 
 # apply_fix_plan
-# Applies the prevalidated LV renames and matching config substitutions from PLAN_FILE.
+# Applies the prevalidated managed-LV renames and matching config substitutions.
 apply_fix_plan() {
     BACKUP="/root/${VMID}.conf.before-volume-name-fix.$(date +%Y%m%d-%H%M%S)"
     dryrun_cmd cp "$CONFIG" "$BACKUP"

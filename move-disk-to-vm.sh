@@ -12,7 +12,7 @@ set -eu
 # Call: setup "$@"
 # Initializes defaults, parses arguments, and performs non-mutating setup.
 setup() {
-    PROJECT_VERSION="3.5.1"; SCRIPT_VERSION="3.5.1"
+    PROJECT_VERSION="3.7.1"; SCRIPT_VERSION="3.7.1"
     MODE="hot"; MODE_ARG=""; ARG1=""; ARG2=""; ARG3=""; ARG_COUNT=0
     REFS_FILE=""; SOURCE_VM=""; SOURCE_SLOT=""; SOURCE_VALUE=""; SOURCE_VOLID=""; SOURCE_ACTIVE=0
     SOURCE_STATUS=""; SOURCE_UNUSED=""; DEST_SLOT=""; DEST_TOUCHED=0; DEST_ATTACHED=0; SOURCE_DETACHED=0
@@ -136,6 +136,15 @@ ok() { printf '%s[OK]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%sWARNING:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 # Call: die [ARG...]
 die() { printf '%sERROR:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# usage_error TEXT...
+# Call: usage_error [TEXT...]
+# Prints a command-line error followed by the complete public usage and exits 2.
+usage_error() {
+    printf '%sUSAGE ERROR:%s %s\n\n' "$C_RED" "$C_RESET" "$*" >&2
+    usage >&2
+    exit 2
+}
 # Call: section [ARG...]
 section() { printf '\n%s%s%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
 
@@ -448,10 +457,13 @@ is_dryrun_arg() { case "$1" in dryrun|--dryrun) return 0 ;; *) return 1 ;; esac;
 # Prints the common dry-run CLI documentation.
 dryrun_help() {
     cat <<'EOF'
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 EOF
 }
 
@@ -527,7 +539,7 @@ parse_arguments() {
         case "$1" in
             dryrun|--dryrun) enable_dryrun ;;
             pause|stop|restart) set_transfer_mode "$1" ;;
-            -h|--help) usage; exit 0 ;;
+            -h|-\?|/h|/\?|--help) usage; exit 0 ;;
             --version) printf '%s %s (project %s)\n' "$(basename "$0")" "$SCRIPT_VERSION" "$PROJECT_VERSION"; exit 0 ;;
             *)
                 ARG_COUNT=$((ARG_COUNT + 1))
@@ -538,7 +550,7 @@ parse_arguments() {
     done
 
     if [ "$ARG_COUNT" -eq 2 ]; then
-        case "$ARG1" in /*) SOURCE_FORM="path" ;; *) die "Two-argument form requires a full absolute LVM path followed by destination VMID." ;; esac
+        case "$ARG1" in /*) SOURCE_FORM="path" ;; *) usage_error "Two-argument form requires a full absolute LVM path followed by destination VMID." ;; esac
         DEST_VM="$ARG2"
     elif [ "$ARG_COUNT" -eq 3 ]; then
         SOURCE_FORM="vm"; SOURCE_VM="$ARG1"; DISK_SELECTOR="$ARG2"; DEST_VM="$ARG3"
