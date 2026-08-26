@@ -2,38 +2,6 @@
 
 **LongTailToilForProxmox** is a collection of 81 self-contained, safety-focused helpers for the Proxmox jobs that are easy to automate but awkward to remember because they happen infrequently, covering VMIDs, LVM/LVM-thin volumes, disks, mounts, storage, recovery and repetitive VM configuration changes. Each helper is a single portable `.sh` file, and modifying commands support `dryrun` so you can perform real read-only preflight checks and review the planned changes before anything is modified.
 
-Canonical repository: <https://github.com/proxmoxhelpers/LongTailToilForProxmox>
-
-Project **v3.7.1** is a corrective patch on the v3.7.0 mount/CLI consolidation. The mount/unmount command family and 81-command CLI surface remain unchanged. This patch fixes the real-Proxmox issues found in the 2026-08-20 v3.7.0 run: semantic disk-option verification, block-device staging for storage-only clones, exact-restore handling of regenerated QEMU `vmgenid`, and zero-SSH remote dry-run; it also corrects two integration-test assumptions.
-
-On **2026-08-26**, the project identity and repository references were standardized on **LongTailToilForProxmox**. This is a branding/repository-path update only; the v3.7.1 production helper behavior and real-host acceptance result are unchanged.
-
-
-The single-drive and all-drive VM mount commands use the same source implementation
-except for one hard-coded scope selector. Both require a stopped QEMU VM, use exact
-slot/path resolution, temporarily preserve inactive-LV activation state, refuse
-ambiguous pre-existing mapper ownership, verify exact mounted-source identity,
-classify recognizable filesystem roles, record invocation-owned resources, and
-roll back partial failures. The all-drive variant simply selects every active disk
-instead of one requested slot.
-
-Every public helper now accepts `-h`, `-?`, `/h`, `/?`, and `--help`, prints usage
-for incomplete required arguments, documents every parser option in live help, and
-uses the same one-line dry-run explanation. Live `--help`, `.usage` snapshots, and
-the embedded help in every per-helper documentation page are checked against the
-actual scripts. A complete v3.7.1 documentation re-audit on 2026-08-22 reconfirmed
-all **81/81** live-help/usage/documentation triplets byte-for-byte, all 81 README,
-helper-index and test-matrix entries, and all local Markdown links. The current
-static/CLI suite passes **78/78** cases including the v3.7.1 corrective regression
-contracts. A fresh 2026-08-22 real-Proxmox run also passes **137/137** operational
-cases across all 14 groups with zero skips, failures or anomalies, so v3.7.1 is
-the current **real-host integration-validated** release for the covered test matrix.
-
-The **v3.5.2 predecessor** is a documentation-contract and consistency release built on the integration-validated v3.5.1 baseline. The implementation, built-in `--help`, verbatim `.usage` snapshots and per-helper documentation were audited code-first so public prerequisites, selector forms, QEMU/LXC scope, storage-alias semantics and destructive-operation boundaries describe what the helpers actually enforce.
-
-Where an existing public document promised behavior the implementation did not provide, v3.5.2 implemented the promise rather than silently weakening it. Read-only inspection helpers adopted the standard elevation boundary claimed by their pages, explicit import slots were restricted to `scsi0..scsi30`, managed-volume name repair was constrained to managed names, and the then-current `mount-vm-root.sh` began selecting the strongest Linux-root candidate. That historical mount helper was later consolidated into `mount-vm-drive.sh` in v3.7.0. The test harness also added source/environment provenance and real mid-transaction rollback fault-injection cases without exposing test hooks in production helpers.
-
-
 ## The 81 helpers
 
 ### VM identity, recovery and inspection
