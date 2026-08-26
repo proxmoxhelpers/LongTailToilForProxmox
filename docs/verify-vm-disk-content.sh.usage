@@ -1,0 +1,25 @@
+verify-vm-disk-content.sh 3.7.1 (project 3.7.1)
+
+USAGE
+  verify-vm-disk-content.sh <disk> [--no-color]
+
+SELECTOR
+  /dev/VG/LV or VMID:SLOT
+
+DESCRIPTION
+  Read-only partition/content sanity check using partx and offset-aware blkid.
+  It never mounts, fscks, creates partition mappers, or writes disk content.
+  Normal mode may temporarily activate an inactive LVM LV with -K and restores
+  its original state; dry-run/preflight refuses rather than changing activation.
+
+COMMON OPTIONS
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version               Show script and project versions and exit.
+  dryrun, --dryrun,
+  --plan                  Enable dry-run/plan mode.
+  --preflight             Run the same non-mutating preflight/plan path.
+  --no-color              Disable ANSI colour output.
+  --quiet                 Reduce non-essential LongTail output where supported.
+
+  Common options may appear anywhere on the command line.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.

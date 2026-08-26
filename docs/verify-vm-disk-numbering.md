@@ -16,8 +16,9 @@ Run the built-in help without performing the operation:
 
 The current built-in help is:
 
+<!-- BEGIN LIVE HELP -->
 ```text
-verify-vm-disk-numbering.sh 3.5.1 (project 3.5.1)
+verify-vm-disk-numbering.sh 3.7.1 (project 3.7.1)
 
 USAGE
   verify-vm-disk-numbering.sh [dryrun]
@@ -39,22 +40,34 @@ DESCRIPTION
 
 COLOURS
   green   numbering looks consistent
-  yellow  active managed disk numbering does not start at 0
+  yellow  active managed numbering starts above 0, has a gap, or has a duplicate
   red     an LV embeds a different VMID than the guest that references it
   cyan    informational / unmanaged LVM reference
 
-Dry-run:
-  Add dryrun or --dryrun anywhere on the command line.
-  Read-only preflight checks still run, but modifying commands are printed
-  instead of executed and mutation-dependent verification is simulated.
+HELP
+  -h, -?, /h, /?, --help  Show this help and exit.
+  --version                Show script and project versions and exit.
+
+DRY-RUN
+  Forms: dryrun, --dryrun.
+  Dry-run: no system changes are made; modifying commands are printed instead of executed.
 ```
+<!-- END LIVE HELP -->
 
 The same output is stored verbatim in [`verify-vm-disk-numbering.sh.usage`](./verify-vm-disk-numbering.sh.usage).
+
+## Test coverage
+
+- Integration reference: `10-inspection.sh`
+- The static suite verifies this helper's POSIX syntax, standalone help/version
+  behavior, help aliases, documented parser options, live-help snapshot, and
+  documentation synchronization.
+- See [`tests/TEST-MATRIX.md`](../tests/TEST-MATRIX.md) for real/negative coverage.
 
 ## Install this helper
 
 ```sh
-wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/main/verify-vm-disk-numbering.sh" -O "verify-vm-disk-numbering.sh" && chmod +x "verify-vm-disk-numbering.sh"
+wget -q "https://raw.githubusercontent.com/proxmoxhelpers/LongTailToilForProxmox/main/verify-vm-disk-numbering.sh" -O "verify-vm-disk-numbering.sh" && chmod +x "verify-vm-disk-numbering.sh"
 ```
 
 ## Examples
@@ -73,7 +86,7 @@ wget -q "https://raw.githubusercontent.com/proxmoxhelpers/Proxmox-LongTailToil/m
 ## Version
 
 ```text
-verify-vm-disk-numbering.sh 3.5.1 (project 3.5.1)
+verify-vm-disk-numbering.sh 3.7.1 (project 3.7.1)
 ```
 
-This page documents the helper as shipped in project **v3.5.1**.
+This page documents the helper as shipped in project **v3.7.1**.
